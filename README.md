@@ -8,7 +8,14 @@
 
 ## 状态
 
-初始基线：只有本说明，尚无实现。
+- 已实现：ABI 类型解析与规范化。
+  - `parse_abi_type(type_string)`：解析 ABI 类型字符串，返回不可变类型对象。
+  - `format_abi_type(abi_type)`：返回不含空白的规范类型字符串。
+  - `ABITypeError`：所有无效输入的唯一异常。
+  - 覆盖 `uintM`/`intM`（M 为 8–256 的 8 的倍数）、`address`、`bool`、
+    `string`、`bytes`、`bytesM`（M 为 1–32）、`T[]`、`T[n]` 及任意深度元组，
+    嵌套最多 128 层。
+- 尚未实现：数值编解码、嵌套结构编解码、事件日志处理。
 
 ## 约定
 
