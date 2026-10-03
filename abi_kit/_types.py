@@ -108,9 +108,15 @@ class ArrayType(ABIType):
 
 @dataclass(frozen=True)
 class TupleType(ABIType):
-    """元组类型，components 按声明顺序保存各组成部分。"""
+    """元组类型，components 按声明顺序保存各组成部分。
+
+    names 为 None 表示未命名元组（默认）；否则它必须与 components 等长，
+    每项为字段名字符串或 None（该位置未命名）。字段名仅用于路径寻址，
+    不参与规范化（:func:`format_abi_type` 不输出名称）。
+    """
 
     components: tuple[ABIType, ...] = field(default=())
+    names: tuple[str | None, ...] | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -121,6 +127,20 @@ class TupleType(ABIType):
             if not isinstance(component, ABIType):
                 raise ABITypeError("元组组成部分必须是 ABIType")
         object.__setattr__(self, "components", components)
+        if self.names is not None:
+            try:
+                names = tuple(self.names)
+            except TypeError as exc:
+                raise ABITypeError("元组字段名必须是 str/None 序列") from exc
+            if len(names) != len(components):
+                raise ABITypeError(
+                    f"字段名数量 {len(names)} 与元组组成部分数量 "
+                    f"{len(components)} 不一致"
+                )
+            for name in names:
+                if name is not None and not isinstance(name, str):
+                    raise ABITypeError("元组字段名必须是 str 或 None")
+            object.__setattr__(self, "names", names)
         if self.depth > MAX_TYPE_DEPTH:
             raise ABITypeError(f"类型嵌套超过 {MAX_TYPE_DEPTH} 层")
 
