@@ -26,7 +26,22 @@
   - `replace_abi_value_at_path(abi_type, data, path, value)`：返回替换后的
     完整新编码；原始字节不被就地修改，动态偏移与长度随结果重算。
   - 覆盖 tuple、动态/定长数组、嵌套数组以及 tuple 内继续嵌套数组。
-- 尚未实现：事件 topic、事件数据还原、日志校验。
+- 已实现：事件 ABI、签名 topic0 与日志还原校验。
+  - `parse_event_abi(event_json)`：解析 ABI JSON 的 event 对象，返回不可变
+    `EventDefinition`（按声明顺序保存参数名、规范类型、indexed 与
+    anonymous 元数据）；tuple 参数由 `components` 递归展开。
+  - `event_topic0(event)`：按 `keccak256("Name(type1,type2,...)")` 计算
+    签名 topic0，返回小写 `"0x"` + 64 位十六进制；参数名与 indexed 不参与
+    签名，anonymous 事件返回 `None`。
+  - `decode_event_log(event, topics, data)`：校验 topics 数量与 topic0，
+    严格解码 data 为非 indexed 参数 tuple，按声明顺序与 indexed 值合并
+    返回一个 tuple。indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`
+    从 32 字节 topic 严格解码；indexed 的 `string`、动态 `bytes`、数组与
+    tuple 不可逆，原样返回该 32 字节 topic（口径 `bytes`）。
+  - `topics` 每项接受 32 字节 `bytes` 或可选 `0x` 前缀的 64 位十六进制
+    字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
+  - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
+    非 NIST SHA3），无第三方依赖。
 
 ## 路径
 
@@ -63,6 +78,15 @@
 
   成功时只返回数据，不返回部分数据或错误对象；原始编码非法仍抛
   `ABIValueError`。
+- `AbiEventError`：事件层五类失败，同样通过 `code` 携带错误码：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `EVENT_ABI_INVALID` | 事件 JSON 或 components 不合法 |
+  | `EVENT_TOPIC_COUNT` | topics 数量与 indexed 参数数量不符 |
+  | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不一致 |
+  | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
+  | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
 
 ## 约定
 
