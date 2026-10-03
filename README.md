@@ -26,7 +26,25 @@
   - `replace_abi_value_at_path(abi_type, data, path, value)`：返回替换后的
     完整新编码；原始字节不被就地修改，动态偏移与长度随结果重算。
   - 覆盖 tuple、动态/定长数组、嵌套数组以及 tuple 内继续嵌套数组。
-- 尚未实现：事件 topic、事件数据还原、日志校验。
+- 已实现：事件 ABI 解析、签名 topic0 与日志还原校验。
+  - `parse_event_abi(event_json)`：解析 ABI JSON 的 event 对象，返回不可变
+    `EventDefinition`（含按声明顺序的不可变 `EventParameter`）。要求
+    `type` 为 `"event"`、`name` 为非空 ASCII 标识符；`anonymous` 与
+    `indexed` 缺失视为 `false`；tuple 参数由 `components` 递归展开，
+    可带 `[]` / `[N]` 后缀。
+  - `event_topic0(event)`：按 `事件名(规范参数类型,...)` 计算 Ethereum
+    Keccak-256，返回小写 `"0x"` + 64 位十六进制；参数名与 `indexed`
+    不参与签名，`anonymous` 事件返回 `None`。
+  - `decode_event_log(event, topics, data)`：校验 topic 数量（非匿名为
+    indexed 数加一且 topics[0] 为签名 topic0，匿名恰为 indexed 数），
+    把 indexed / 非 indexed 参数按原声明顺序合并为 tuple 返回。
+    - topics 项接受 32 字节 `bytes` 或可选 `0x` 前缀的 64 位十六进制
+      `str`；data 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制 `str`。
+    - indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM` 按字严格解码；
+      indexed 的 `string`、动态 `bytes`、数组与 tuple 不可逆，返回原始
+      32 字节 topic（`bytes` 口径）。
+    - 非 indexed 参数组成 tuple 按值层严格规范解码；无此类参数时
+      data 必须为空。
 
 ## 路径
 
@@ -63,6 +81,16 @@
 
   成功时只返回数据，不返回部分数据或错误对象；原始编码非法仍抛
   `ABIValueError`。
+- `AbiEventError`：事件层五类失败，同样通过 `code` 属性携带唯一
+  错误码：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `EVENT_ABI_INVALID` | 事件 JSON 对象或 components 非法 |
+  | `EVENT_TOPIC_COUNT` | topic 数量与 indexed 参数数量不符 |
+  | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不符 |
+  | `EVENT_TOPIC_VALUE` | topic 字节形式非法，或 indexed 基础值违反严格填充/越界 |
+  | `EVENT_DATA_INVALID` | 非 indexed 参数 tuple 的 data 编码非法 |
 
 ## 约定
 

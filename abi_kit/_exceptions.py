@@ -4,8 +4,9 @@
 - ABIValueError：值与类型不匹配、编码数据非法或类型对象不适用于值层
   操作（值层）。
 - AbiPathError：路径语法非法或按路径读取/定点替换失败（路径层）。
+- AbiEventError：事件 ABI 声明非法或事件日志还原/校验失败（事件层）。
 
-三者各自独立，均为 ValueError 子类。
+各层异常独立，均为 ValueError 子类。
 """
 
 
@@ -43,5 +44,35 @@ class AbiPathError(ValueError):
     def __init__(self, code: str, message: str):
         if code not in self.CODES:
             raise ValueError(f"未知的路径错误码：{code!r}")
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+class AbiEventError(ValueError):
+    """事件 ABI 声明非法或事件日志还原/校验失败。
+
+    ``code`` 取下列唯一错误码之一：
+
+    - ``EVENT_ABI_INVALID``：事件 JSON 对象或其中的 components 非法
+      （缺少/错误的 ``type``、名称非法、参数结构无法解析等）；
+    - ``EVENT_TOPIC_COUNT``：实际 topic 数量与事件 indexed 参数数量不符；
+    - ``EVENT_TOPIC0_MISMATCH``：非匿名事件的 topics[0] 与签名 topic0 不符；
+    - ``EVENT_TOPIC_VALUE``：indexed 基础类型的 topic 字违反严格填充或
+      数值越界，或 topic/data 字节形式本身非法；
+    - ``EVENT_DATA_INVALID``：非 indexed 参数组成的 tuple 的 ABI 数据非法。
+    """
+
+    #: 全部公开错误码。
+    CODES = (
+        "EVENT_ABI_INVALID",
+        "EVENT_TOPIC_COUNT",
+        "EVENT_TOPIC0_MISMATCH",
+        "EVENT_TOPIC_VALUE",
+        "EVENT_DATA_INVALID",
+    )
+
+    def __init__(self, code: str, message: str):
+        if code not in self.CODES:
+            raise ValueError(f"未知的事件错误码：{code!r}")
         self.code = code
         super().__init__(f"{code}: {message}")
