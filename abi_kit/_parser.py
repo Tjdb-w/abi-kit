@@ -4,14 +4,18 @@
 
     type       := elementary | tuple ，后接零个或多个数组后缀
     elementary := uintM | intM | address | bool | string | bytes | bytesM
-    tuple      := '(' [type (',' type)*] ')'
+    tuple      := '(' [component (',' component)*] ')'
+    component  := type [name]      # name 仅元组组成部分可带，供字段路径使用
+    name       := [A-Za-z_$][A-Za-z0-9_$]*
     suffix     := '[]' | '[' [1-9][0-9]* ']'
 
 空白（仅 ASCII 空白）只允许出现在：
 1. 整个类型字符串的两端；
-2. 元组中逗号的两侧。
+2. 元组中逗号的两侧；
+3. 元组组成部分的类型与其字段名之间（至少一个空白字符）。
 其余位置的空白（类型词内部、括号内侧、数组语法内部等）一律报错。
-输入必须完整解析，尾随任何非空白字符均报错。
+输入必须完整解析，尾随任何非空白字符均报错。字段名不参与规范类型字符串，
+也不影响类型对象的相等性。
 """
 
 from __future__ import annotations
@@ -137,8 +141,12 @@ class _Parser:
                 self._pos += 1
                 return TupleType(())
             components: list[ABIType] = []
+            names: list[str | None] = []
             while True:
-                components.append(self._parse_type())
+                component = self._parse_type()
+                name = self._parse_optional_component_name()
+                components.append(component)
+                names.append(name)
                 # 逗号左侧允许 ASCII 空白；但 ')' 内侧不允许，因此先记录
                 # 是否跳过了空白，若空白后直接是 ')' 则属非法。
                 anchor = self._pos
@@ -156,10 +164,36 @@ class _Parser:
                     if had_whitespace:
                         raise self._error("元组 ')' 内侧不允许空白")
                     self._pos += 1
-                    return TupleType(tuple(components))
+                    return TupleType(tuple(components), tuple(names))
                 raise self._error("元组中应为 ',' 或 ')'")
         finally:
             self._tuple_depth -= 1
+
+    def _parse_optional_component_name(self) -> str | None:
+        """解析组成部分类型后可选的字段名。
+
+        字段名必须与类型之间至少隔一个 ASCII 空白；无空白时即便下一字符
+        看起来像标识符也不得吞作名称（那种情况属于缺少分隔符，由调用处
+        按“应为 ',' 或 ')'”报错）。
+        """
+        anchor = self._pos
+        self._skip_whitespace()
+        if self._pos == anchor:
+            return None
+        ch = self._peek()
+        if ch is None or not (ch.isascii() and (ch.isalpha() or ch in "_$")):
+            # 回退跳过的空白，交由调用处沿用原有分隔符判定（',' / ')'）。
+            self._pos = anchor
+            return None
+        start = self._pos
+        self._pos += 1
+        while True:
+            ch = self._peek()
+            if ch is not None and ch.isascii() and (ch.isalnum() or ch in "_$"):
+                self._pos += 1
+                continue
+            break
+        return self._text[start:self._pos]
 
     def _parse_suffixes(self, head: ABIType) -> ABIType:
         current = head
