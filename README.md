@@ -40,6 +40,18 @@
     tuple 不可逆，原样返回该 32 字节 topic（口径 `bytes`）。
   - `topics` 每项接受 32 字节 `bytes` 或可选 `0x` 前缀的 64 位十六进制
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
+  - `encode_event_log(event, values)`：`values` 为按声明顺序的参数值
+    list/tuple，返回不可变 `EncodedEventLog`（`topics` 为 bytes tuple、
+    `data` 为 bytes，以及 `topics_hex` / `data_hex` 十六进制视图）。非
+    indexed 参数组成 tuple 按 ABI 值编码生成 `data`，无此类参数时为
+    `b""`；非匿名事件 `topics` 先放签名 topic0（匿名事件不放），再按
+    声明顺序放 indexed 主题。indexed 的 `address`/`bool`/`intM`/`uintM`/
+    `bytesM` 取 32 字节 ABI 规范字（address 左补零、bytesM 右补零）；
+    indexed 的 `string`、动态 `bytes`、数组、tuple 取事件索引特殊编码的
+    Keccak-256：string 用 UTF-8 字节、动态 bytes 用内容（均不补零），
+    数组省略长度并递归连接元素，tuple 递归连接成员，递归成员与整段结果
+    补齐到 32 字节倍数。动态 indexed 参数经 `decode_event_log` 仍还原为
+    32 字节 topic bytes，不伪装成可逆值。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
     非 NIST SHA3），无第三方依赖。
 - 已实现：函数 ABI、selector 与函数调用 calldata 编解码。
@@ -101,7 +113,7 @@
 
   成功时只返回数据，不返回部分数据或错误对象；原始编码非法仍抛
   `ABIValueError`。
-- `AbiEventError`：事件层五类失败，同样通过 `code` 携带错误码：
+- `AbiEventError`：事件层六类失败，同样通过 `code` 携带错误码：
 
   | 错误码 | 触发情形 |
   | --- | --- |
@@ -110,6 +122,7 @@
   | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不一致 |
   | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
   | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
+  | `EVENT_VALUE_INVALID` | `encode_event_log` 的 event 非 EventDefinition、values 非 list/tuple、数量不符，或任一值与声明类型不匹配 |
 
 - 函数调用路径的六类失败（均为独立的 `ValueError` 子类；值不匹配仍抛
   既有 `ABIValueError`，别名 `AbiValueError`）：

@@ -8,6 +8,8 @@
   十六进制；参数名与 indexed 不参与签名，anonymous 事件返回 None。
 - :func:`decode_event_log`：校验 topics 并严格还原 data，按声明顺序
   合并为一个 tuple。
+- :func:`encode_event_log`：按声明顺序接收事件参数值，编码为不可变的
+  :class:`EncodedEventLog`（topics/data 及对应十六进制视图）。
 
 日志口径：
 
@@ -18,6 +20,19 @@
   解码；indexed 的 string、动态 bytes、数组与 tuple 不可逆，原样返回
   32 字节 topic，口径为 bytes。
 
+编码口径（:func:`encode_event_log`）：
+
+- 非 indexed 参数组成 tuple 按 ABI 值编码生成 data，没有此类参数时
+  data 为空字节串；
+- 非匿名事件 topics 先放签名 topic0，匿名事件不放，随后按声明顺序放
+  indexed 主题；
+- indexed 的 address/bool/intM/uintM/bytesM 沿用值编码生成 32 字节
+  规范字；indexed 的 string、动态 bytes、数组、tuple 取事件索引特殊
+  编码的 Keccak-256：string 用 UTF-8 字节、动态 bytes 用内容，数组
+  省略长度并递归连接元素，tuple 递归连接成员；基础值用 32 字节 ABI
+  规范字，bytesM 右补零，递归成员与整段结果补齐到 32 字节倍数，
+  string 与动态 bytes 内容不补零。
+
 所有失败统一抛出 :class:`abi_kit.AbiEventError`，以 ``code`` 区分。
 """
 
@@ -26,8 +41,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ._codec import decode_abi_value
-from ._exceptions import ABITypeError, AbiEventError
+from ._codec import decode_abi_value, encode_abi_value
+from ._exceptions import ABITypeError, AbiEventError, ABIValueError
 from ._format import format_abi_type
 from ._keccak import keccak_256
 from ._parser import parse_abi_type
@@ -70,6 +85,33 @@ class EventDefinition:
     name: str
     inputs: tuple[EventParameter, ...] = field(default=())
     anonymous: bool = False
+
+
+@dataclass(frozen=True)
+class EncodedEventLog:
+    """事件日志编码结果（不可变）。
+
+    - ``topics``：32 字节 topic 组成的 tuple，非匿名事件以签名 topic0
+      开头，随后按声明顺序排列 indexed 主题；匿名事件无 topic0；
+    - ``data``：非 indexed 参数组成 tuple 的 ABI 编码，无非 indexed
+      参数时为空字节串；
+    - ``topics_hex``：与 ``topics`` 一一对应的小写 ``"0x"`` + 64 位
+      十六进制 tuple；
+    - ``data_hex``：``data`` 的小写 ``"0x"`` 前缀十六进制字符串。
+    """
+
+    topics: tuple[bytes, ...]
+    data: bytes
+
+    @property
+    def topics_hex(self) -> tuple[str, ...]:
+        """各 topic 的小写 ``"0x"`` + 64 位十六进制形式。"""
+        return tuple("0x" + topic.hex() for topic in self.topics)
+
+    @property
+    def data_hex(self) -> str:
+        """``data`` 的小写 ``"0x"`` 前缀十六进制形式。"""
+        return "0x" + self.data.hex()
 
 
 # ---- ABI JSON 解析 -------------------------------------------------------
@@ -368,3 +410,140 @@ def decode_event_log(event: EventDefinition, topics, data) -> tuple:
         else:
             result.append(next(data_iter))
     return tuple(result)
+
+
+# ---- 日志编码 ------------------------------------------------------------
+
+
+def _indexed_special_encoding(abi_type: ABIType, value) -> bytes:
+    """构造动态 indexed 参数在 Keccak 之前的事件索引特殊编码字节串。
+
+    - string 取 UTF-8 字节、动态 bytes 取内容，均不补零；
+    - 其余基础值取 32 字节 ABI 规范字（bytesM 右补零）；
+    - 数组省略长度，递归连接元素后整段右补零到 32 字节倍数；
+    - tuple 递归连接成员后整段右补零到 32 字节倍数。
+
+    值与类型不匹配抛 :class:`abi_kit.ABIValueError`，与值层口径一致。
+    """
+    if isinstance(abi_type, ElementaryType):
+        kind = abi_type.kind
+        if kind == "string":
+            if not isinstance(value, str):
+                raise ABIValueError(
+                    f"indexed string 需要 str，得到 {type(value).__name__}"
+                )
+            try:
+                return value.encode("utf-8")
+            except UnicodeEncodeError as exc:
+                raise ABIValueError(f"字符串无法编码为 UTF-8：{exc}") from exc
+        if kind == "bytes" and abi_type.byte_size is None:
+            if not isinstance(value, bytes):
+                raise ABIValueError(
+                    f"indexed bytes 需要 bytes，得到 {type(value).__name__}"
+                )
+            return value
+        # 静态基础类型：32 字节 ABI 规范字（address 左补零、bytesM 右补零）。
+        return encode_abi_value(abi_type, value)
+
+    if isinstance(abi_type, ArrayType):
+        if not isinstance(value, list):
+            raise ABIValueError(f"indexed 数组需要 list，得到 {type(value).__name__}")
+        if abi_type.length is not None and len(value) != abi_type.length:
+            raise ABIValueError(
+                f"indexed 定长数组长度应为 {abi_type.length}，得到 {len(value)}"
+            )
+        # 省略长度字，递归连接元素，整段补齐到 32 字节倍数。
+        body = b"".join(
+            _indexed_special_encoding(abi_type.element_type, item) for item in value
+        )
+        return body + b"\x00" * ((-len(body)) % _WORD)
+
+    if isinstance(abi_type, TupleType):
+        if not isinstance(value, tuple):
+            raise ABIValueError(f"indexed 元组需要 tuple，得到 {type(value).__name__}")
+        if len(value) != len(abi_type.components):
+            raise ABIValueError(
+                f"indexed 元组长度应为 {len(abi_type.components)}，得到 {len(value)}"
+            )
+        # 递归连接成员，整段补齐到 32 字节倍数。
+        body = b"".join(
+            _indexed_special_encoding(component, item)
+            for component, item in zip(abi_type.components, value)
+        )
+        return body + b"\x00" * ((-len(body)) % _WORD)
+
+    raise ABIValueError(f"无法编解码非 ABIType 对象：{abi_type!r}")
+
+
+def _encode_indexed_topic(abi_type: ABIType, value) -> bytes:
+    """把单个 indexed 值编码为 32 字节 topic。"""
+    if isinstance(abi_type, ElementaryType):
+        kind = abi_type.kind
+        if kind == "string" or (kind == "bytes" and abi_type.byte_size is None):
+            return keccak_256(_indexed_special_encoding(abi_type, value))
+        # address/bool/intM/uintM/bytesM：沿用值编码的 32 字节规范字。
+        return encode_abi_value(abi_type, value)
+    # 数组与 tuple：事件索引特殊编码后取 Keccak-256。
+    return keccak_256(_indexed_special_encoding(abi_type, value))
+
+
+def encode_event_log(event: EventDefinition, values) -> EncodedEventLog:
+    """按事件声明把参数值编码为日志 topics/data。
+
+    ``values`` 为按参数声明顺序排列的 list 或 tuple。非 indexed 参数
+    组成 tuple 按 ABI 值编码生成 ``data``，没有非 indexed 参数时
+    ``data`` 为 ``b""``；非匿名事件 topics 先放签名 topic0（32 字节），
+    匿名事件不放，随后按声明顺序放 indexed 主题。indexed 的
+    address/bool/intM/uintM/bytesM 为 32 字节 ABI 规范字（address 左
+    补零、bytesM 右补零）；indexed 的 string、动态 bytes、数组、tuple
+    取事件索引特殊编码的 Keccak-256 主题。
+
+    返回不可变 :class:`EncodedEventLog`，相同输入始终得到相同结果。
+    ``event`` 非 :class:`EventDefinition`、``values`` 不是 list/tuple、
+    数量不符或任一值与声明类型不匹配时，只抛 code 为
+    ``EVENT_VALUE_INVALID`` 的 :class:`abi_kit.AbiEventError`。
+    """
+    if not isinstance(event, EventDefinition):
+        raise AbiEventError(
+            "EVENT_VALUE_INVALID",
+            f"需要 EventDefinition，得到 {type(event).__name__}",
+        )
+    if not isinstance(values, (list, tuple)):
+        raise AbiEventError(
+            "EVENT_VALUE_INVALID",
+            f"values 必须是 list 或 tuple，得到 {type(values).__name__}",
+        )
+    if len(values) != len(event.inputs):
+        raise AbiEventError(
+            "EVENT_VALUE_INVALID",
+            f"values 数量应为 {len(event.inputs)}，得到 {len(values)}",
+        )
+
+    try:
+        topics: list[bytes] = []
+        if not event.anonymous:
+            topics.append(bytes.fromhex(event_topic0(event)[2:]))
+
+        non_indexed_values: list = []
+        for param, value in zip(event.inputs, values):
+            if param.indexed:
+                topics.append(_encode_indexed_topic(param.abi_type, value))
+            else:
+                non_indexed_values.append(value)
+
+        if non_indexed_values:
+            data_type = TupleType(
+                tuple(
+                    param.abi_type
+                    for param in event.inputs
+                    if not param.indexed
+                )
+            )
+            data = encode_abi_value(data_type, tuple(non_indexed_values))
+        else:
+            data = b""
+    except (ABIValueError, ABITypeError) as exc:
+        # 值层与类型层异常不得泄漏到事件编码入口之外。
+        raise AbiEventError("EVENT_VALUE_INVALID", f"事件参数编码失败：{exc}") from None
+
+    return EncodedEventLog(tuple(topics), data)

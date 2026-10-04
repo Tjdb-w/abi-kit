@@ -69,7 +69,10 @@ class AbiEventError(ValueError):
     - ``EVENT_TOPIC_VALUE``：某个 topic 不是 32 字节数据，或可还原的
       indexed 基础值（address/bool/intM/uintM/bytesM）无法严格解码；
     - ``EVENT_DATA_INVALID``：data 不是合法的偶数位十六进制/字节串，或
-      非 indexed 参数 tuple 无法严格解码（长度、偏移、填充、残留等）。
+      非 indexed 参数 tuple 无法严格解码（长度、偏移、填充、残留等）；
+    - ``EVENT_VALUE_INVALID``：encode_event_log 的入参不合法（event 非
+      EventDefinition、values 非 list/tuple、数量不符，或任一值与声明
+      类型不匹配）。
     """
 
     #: 全部公开错误码。
@@ -79,6 +82,7 @@ class AbiEventError(ValueError):
         "EVENT_TOPIC0_MISMATCH",
         "EVENT_TOPIC_VALUE",
         "EVENT_DATA_INVALID",
+        "EVENT_VALUE_INVALID",
     )
 
     def __init__(self, code: str, message: str):
