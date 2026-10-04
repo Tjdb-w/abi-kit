@@ -1,4 +1,5 @@
-"""parse_event_abi / event_topic0 / decode_event_log 与 Keccak 的行为测试。
+"""parse_event_abi / event_topic0 / decode_event_log / encode_event_log
+与 Keccak 的行为测试。
 
 仅使用标准库 unittest，无第三方依赖。topic0 向量取自链上常见事件
 （Transfer / Approval / OwnershipTransferred）。
@@ -9,9 +10,11 @@ import unittest
 from abi_kit import (
     AbiEventError,
     ArrayType,
+    EncodedEventLog,
     EventDefinition,
     decode_event_log,
     encode_abi_value,
+    encode_event_log,
     event_topic0,
     format_abi_type,
     parse_abi_type,
@@ -1003,6 +1006,7 @@ class ExceptionContractTests(unittest.TestCase):
                 "EVENT_TOPIC0_MISMATCH",
                 "EVENT_TOPIC_VALUE",
                 "EVENT_DATA_INVALID",
+                "EVENT_VALUE_INVALID",
             },
         )
         with self.assertRaises(ValueError):
@@ -1017,6 +1021,590 @@ class ExceptionContractTests(unittest.TestCase):
         )
         self.assertEqual(result, ())
         self.assertIsInstance(result, tuple)
+
+
+class EncodeEventLogBasicTests(unittest.TestCase):
+    def setUp(self):
+        self.event = parse_event_abi(transfer_event())
+        self.topic0 = bytes.fromhex(TRANSFER_TOPIC0[2:])
+
+    def test_returns_immutable_result(self):
+        result = encode_event_log(self.event, [ADDR_A, ADDR_B, 1000])
+        self.assertIsInstance(result, EncodedEventLog)
+        self.assertIs(result.event, self.event)
+        self.assertIsInstance(result.topics, tuple)
+        self.assertIsInstance(result.data, bytes)
+        with self.assertRaises(Exception):
+            result.data = b""
+        with self.assertRaises(Exception):
+            result.topics = ()
+
+    def test_encode_transfer(self):
+        result = encode_event_log(self.event, [ADDR_A, ADDR_B, 1000])
+        self.assertEqual(result.topics, (self.topic0, addr_word(ADDR_A), addr_word(ADDR_B)))
+        self.assertEqual(result.data, word(1000))
+        self.assertEqual(
+            result.topics_hex,
+            (TRANSFER_TOPIC0, "0x" + addr_word(ADDR_A).hex(), "0x" + addr_word(ADDR_B).hex()),
+        )
+        self.assertEqual(result.data_hex, "0x" + word(1000).hex())
+
+    def test_values_accepts_tuple(self):
+        result = encode_event_log(self.event, (ADDR_A, ADDR_B, 1000))
+        self.assertEqual(result.topics, (self.topic0, addr_word(ADDR_A), addr_word(ADDR_B)))
+        self.assertEqual(result.data, word(1000))
+
+    def test_hex_views_are_lowercase_0x(self):
+        result = encode_event_log(self.event, [ADDR_A, ADDR_B, 0])
+        for topic_hex in result.topics_hex:
+            self.assertTrue(topic_hex.startswith("0x"))
+            self.assertEqual(len(topic_hex), 66)
+            self.assertEqual(topic_hex, topic_hex.lower())
+        self.assertTrue(result.data_hex.startswith("0x"))
+        self.assertEqual(result.data_hex, result.data_hex.lower())
+
+    def test_anonymous_has_no_topic0(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "An",
+                "anonymous": True,
+                "inputs": [
+                    {"indexed": True, "name": "a", "type": "address"},
+                    {"indexed": False, "name": "b", "type": "uint256"},
+                ],
+            }
+        )
+        result = encode_event_log(event, [ADDR_A, 3])
+        self.assertEqual(result.topics, (addr_word(ADDR_A),))
+        self.assertEqual(result.topics_hex, ("0x" + addr_word(ADDR_A).hex(),))
+        self.assertEqual(result.data, word(3))
+
+    def test_empty_event(self):
+        event = parse_event_abi({"type": "event", "name": "Z", "inputs": []})
+        result = encode_event_log(event, [])
+        self.assertEqual(result.topics, (bytes.fromhex(event_topic0(event)[2:]),))
+        self.assertEqual(result.data, b"")
+        self.assertEqual(result.data_hex, "0x")
+
+    def test_all_indexed_has_empty_data(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Only",
+                "inputs": [{"indexed": True, "name": "a", "type": "address"}],
+            }
+        )
+        result = encode_event_log(event, [ADDR_A])
+        self.assertEqual(result.topics[1:], (addr_word(ADDR_A),))
+        self.assertEqual(result.data, b"")
+
+    def test_all_non_indexed_has_only_topic0(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Plain",
+                "inputs": [
+                    {"name": "a", "type": "uint32"},
+                    {"name": "b", "type": "bool"},
+                ],
+            }
+        )
+        result = encode_event_log(event, [7, True])
+        self.assertEqual(result.topics, (bytes.fromhex(event_topic0(event)[2:]),))
+        self.assertEqual(result.data, word(7) + (b"\x00" * 31 + b"\x01"))
+
+    def test_merge_order_independent_of_indexed(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Mix",
+                "inputs": [
+                    {"indexed": False, "name": "a", "type": "uint256"},
+                    {"indexed": True, "name": "b", "type": "address"},
+                    {"indexed": False, "name": "c", "type": "bool"},
+                    {"indexed": True, "name": "d", "type": "uint64"},
+                ],
+            }
+        )
+        result = encode_event_log(event, [5, ADDR_A, True, 99])
+        self.assertEqual(result.topics[1:], (addr_word(ADDR_A), word(99)))
+        self.assertEqual(result.data, word(5) + word(1))
+
+    def test_indexed_basic_types_words(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Prims",
+                "inputs": [
+                    {"indexed": True, "name": "u", "type": "uint8"},
+                    {"indexed": True, "name": "i", "type": "int8"},
+                    {"indexed": True, "name": "neg", "type": "int128"},
+                    {"indexed": True, "name": "flag", "type": "bool"},
+                    {"indexed": True, "name": "b4", "type": "bytes4"},
+                    {"indexed": True, "name": "b32", "type": "bytes32"},
+                ],
+            }
+        )
+        result = encode_event_log(
+            event, [255, 127, -1, True, b"abcd", bytes(range(32))]
+        )
+        self.assertEqual(
+            result.topics[1:],
+            (
+                word(255),
+                word(127),
+                (-1).to_bytes(W, "big", signed=True),
+                b"\x00" * 31 + b"\x01",
+                b"abcd" + b"\x00" * 28,
+                bytes(range(32)),
+            ),
+        )
+        self.assertEqual(result.data, b"")
+
+    def test_address_pads_high_bytes(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "A",
+                "inputs": [{"indexed": True, "name": "a", "type": "address"}],
+            }
+        )
+        result = encode_event_log(event, [ADDR_A])
+        self.assertEqual(result.topics[1], b"\x00" * 12 + bytes.fromhex(ADDR_A[2:]))
+
+    def test_bytesM_pads_low_bytes(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "M",
+                "inputs": [{"indexed": True, "name": "v", "type": "bytes4"}],
+            }
+        )
+        result = encode_event_log(event, [b"abcd"])
+        self.assertEqual(result.topics[1], b"abcd" + b"\x00" * 28)
+
+
+class EncodeDecodeRoundTripTests(unittest.TestCase):
+    def _roundtrip(self, event_json, values):
+        event = parse_event_abi(event_json)
+        encoded = encode_event_log(event, values)
+        return event, decode_event_log(event, encoded.topics, encoded.data), encoded
+
+    def test_transfer_roundtrip(self):
+        event, decoded, _ = self._roundtrip(transfer_event(), [ADDR_A, ADDR_B, 1000])
+        self.assertEqual(decoded, (ADDR_A, ADDR_B, 1000))
+
+    def test_anonymous_roundtrip(self):
+        event_json = {
+            "type": "event",
+            "name": "An",
+            "anonymous": True,
+            "inputs": [
+                {"indexed": True, "name": "a", "type": "address"},
+                {"indexed": False, "name": "b", "type": "uint256"},
+            ],
+        }
+        _, decoded, _ = self._roundtrip(event_json, [ADDR_A, 7])
+        self.assertEqual(decoded, (ADDR_A, 7))
+
+    def test_dynamic_non_indexed_roundtrip(self):
+        event_json = {
+            "type": "event",
+            "name": "Dyn",
+            "inputs": [
+                {"indexed": False, "name": "s", "type": "string"},
+                {"indexed": False, "name": "raw", "type": "bytes"},
+                {"indexed": False, "name": "arr", "type": "uint32[]"},
+            ],
+        }
+        _, decoded, _ = self._roundtrip(
+            event_json, ("hi", b"\xde\xad", [1, 2])
+        )
+        self.assertEqual(decoded, ("hi", b"\xde\xad", [1, 2]))
+
+    def test_tuple_non_indexed_roundtrip(self):
+        event_json = {
+            "type": "event",
+            "name": "WithTuple",
+            "inputs": [
+                {
+                    "indexed": False,
+                    "name": "p",
+                    "type": "tuple",
+                    "components": [
+                        {"name": "to", "type": "address"},
+                        {"name": "amount", "type": "uint256"},
+                    ],
+                },
+                {"indexed": True, "name": "tag", "type": "bytes32"},
+            ],
+        }
+        _, decoded, _ = self._roundtrip(event_json, ((ADDR_A, 7), b"\x42" * 32))
+        self.assertEqual(decoded, ((ADDR_A, 7), b"\x42" * 32))
+
+    def test_dynamic_indexed_returns_raw_topic_on_decode(self):
+        event_json = {
+            "type": "event",
+            "name": "S",
+            "inputs": [
+                {"indexed": True, "name": "s", "type": "string"},
+                {"indexed": True, "name": "r", "type": "bytes"},
+            ],
+        }
+        event, decoded, encoded = self._roundtrip(event_json, ["hello", b"\x01\x02"])
+        self.assertEqual(decoded, tuple(encoded.topics[1:]))
+        self.assertIsInstance(decoded[0], bytes)
+        self.assertIsInstance(decoded[1], bytes)
+
+    def test_indexed_array_and_tuple_return_raw_topics(self):
+        event_json = {
+            "type": "event",
+            "name": "C",
+            "inputs": [
+                {"indexed": True, "name": "arr", "type": "uint256[]"},
+                {
+                    "indexed": True,
+                    "name": "p",
+                    "type": "tuple",
+                    "components": [
+                        {"name": "a", "type": "uint256"},
+                        {"name": "b", "type": "address"},
+                    ],
+                },
+            ],
+        }
+        values = [[1, 2], (3, ADDR_A)]
+        event, decoded, encoded = self._roundtrip(event_json, values)
+        self.assertEqual(decoded, tuple(encoded.topics[1:]))
+
+    def test_deterministic(self):
+        event = parse_event_abi(transfer_event())
+        self.assertEqual(
+            encode_event_log(event, [ADDR_A, ADDR_B, 1]),
+            encode_event_log(event, [ADDR_A, ADDR_B, 1]),
+        )
+
+
+class EncodeIndexedSpecialTests(unittest.TestCase):
+    """indexed string/bytes/数组/tuple 的事件索引特殊 Keccak-256 主题。"""
+
+    def _topic(self, type_string, value, components=None):
+        inputs = [{"indexed": True, "name": "v", "type": type_string}]
+        if components is not None:
+            inputs[0]["components"] = components
+        event = parse_event_abi(
+            {"type": "event", "name": "E", "inputs": inputs}
+        )
+        return encode_event_log(event, [value]).topics[1]
+
+    def test_string_uses_utf8_content_no_length_no_padding(self):
+        self.assertEqual(self._topic("string", "hello"), keccak_256(b"hello"))
+        # 与 ABI 值编码（含长度字与填充）不同。
+        self.assertNotEqual(
+            self._topic("string", "hello"),
+            keccak_256(encode_abi_value(parse_abi_type("string"), "hello")),
+        )
+
+    def test_dynamic_bytes_uses_content(self):
+        self.assertEqual(self._topic("bytes", b"\x01\x02"), keccak_256(b"\x01\x02"))
+
+    def test_empty_string_and_bytes_hash_empty_preimage(self):
+        self.assertEqual(self._topic("string", ""), keccak_256(b""))
+        self.assertEqual(self._topic("bytes", b""), keccak_256(b""))
+
+    def test_dynamic_array_omits_length(self):
+        self.assertEqual(
+            self._topic("uint256[]", [1, 2]),
+            keccak_256(word(1) + word(2)),
+        )
+        self.assertEqual(self._topic("uint256[]", []), keccak_256(b""))
+
+    def test_fixed_array_also_hashed(self):
+        self.assertEqual(
+            self._topic("uint256[2]", [1, 2]),
+            keccak_256(word(1) + word(2)),
+        )
+
+    def test_array_of_static_pads_each_element_to_word(self):
+        # uint8 元素各占一个 32 字节规范字。
+        self.assertEqual(
+            self._topic("uint8[]", [1, 2]),
+            keccak_256(word(1) + word(2)),
+        )
+        # bytes4 元素右补零到 32 字节。
+        self.assertEqual(
+            self._topic("bytes4[]", [b"abcd", b"wxyz"]),
+            keccak_256(b"abcd" + b"\x00" * 28 + b"wxyz" + b"\x00" * 28),
+        )
+
+    def test_array_of_dynamic_elements_content_padded_per_element(self):
+        self.assertEqual(
+            self._topic("string[]", ["a", "bb"]),
+            keccak_256(b"a" + b"\x00" * 31 + b"bb" + b"\x00" * 30),
+        )
+        self.assertEqual(
+            self._topic("bytes[]", [b"\xab", b"\x01\x02"]),
+            keccak_256(b"\xab" + b"\x00" * 31 + b"\x01\x02" + b"\x00" * 30),
+        )
+
+    def test_nested_array_flattens_with_padding(self):
+        # 内层静态块各自右补齐：[[1,2],[3]] 与 [[1],[2,3]] 原像相同。
+        self.assertEqual(
+            self._topic("uint256[][]", [[1, 2], [3]]),
+            keccak_256(word(1) + word(2) + word(3)),
+        )
+        self.assertEqual(
+            self._topic("uint256[][]", [[1], [2, 3]]),
+            keccak_256(word(1) + word(2) + word(3)),
+        )
+        self.assertEqual(
+            self._topic("uint256[2][2]", [[1, 2], [3, 4]]),
+            keccak_256(word(1) + word(2) + word(3) + word(4)),
+        )
+
+    def test_tuple_concatenates_padded_members(self):
+        components = [
+            {"name": "x", "type": "uint256"},
+            {"name": "s", "type": "string"},
+        ]
+        self.assertEqual(
+            self._topic("tuple", (5, "hi"), components),
+            keccak_256(word(5) + b"hi" + b"\x00" * 30),
+        )
+
+    def test_static_tuple_is_concatenated_words(self):
+        components = [
+            {"name": "a", "type": "uint256"},
+            {"name": "b", "type": "address"},
+        ]
+        self.assertEqual(
+            self._topic("tuple", (3, ADDR_A), components),
+            keccak_256(word(3) + addr_word(ADDR_A)),
+        )
+
+    def test_empty_tuple_hashes_empty_preimage(self):
+        self.assertEqual(self._topic("tuple", (), []), keccak_256(b""))
+
+    def test_tuple_with_array_member(self):
+        components = [{"name": "xs", "type": "uint256[]"}]
+        # 成员是省略长度的连接块，右补齐。
+        self.assertEqual(
+            self._topic("tuple", ([1, 2],), components),
+            keccak_256(word(1) + word(2)),
+        )
+
+    def test_nested_tuple(self):
+        components = [
+            {
+                "name": "in",
+                "type": "tuple",
+                "components": [
+                    {"name": "x", "type": "uint256"},
+                    {"name": "f", "type": "bool"},
+                ],
+            }
+        ]
+        self.assertEqual(
+            self._topic("tuple", ((7, True),), components),
+            keccak_256(word(7) + word(1)),
+        )
+
+    def test_array_of_empty_tuples_hashes_empty_preimage(self):
+        self.assertEqual(
+            self._topic(
+                "tuple[3][]",
+                [[(), (), ()]],
+                [],
+            ),
+            keccak_256(b""),
+        )
+
+
+class EncodeEventLogValueErrorTests(unittest.TestCase):
+    def setUp(self):
+        self.event = parse_event_abi(transfer_event())
+
+    def _invalid(self, event, values):
+        with self.assertRaises(AbiEventError) as ctx:
+            encode_event_log(event, values)
+        self.assertEqual(ctx.exception.code, "EVENT_VALUE_INVALID")
+
+    def test_event_not_definition(self):
+        for bad in (None, 42, "event", [], {}):
+            self._invalid(bad, [])
+
+    def test_values_not_list_or_tuple(self):
+        for bad in (None, 42, "x", b"", iter([1]), {1: 2}):
+            self._invalid(self.event, bad)
+
+    def test_values_count_mismatch(self):
+        self._invalid(self.event, [ADDR_A, ADDR_B])
+        self._invalid(self.event, [ADDR_A, ADDR_B, 1, 2])
+
+    def test_elementary_value_mismatch(self):
+        self._invalid(self.event, [ADDR_A, ADDR_B, "1"])
+        # bool 不能冒充 int。
+        self._invalid(self.event, [ADDR_A, ADDR_B, True])
+        # address 必须是十六进制字符串。
+        self._invalid(self.event, [0, ADDR_B, 1])
+        self._invalid(self.event, ["0x" + "00" * 19, ADDR_B, 1])
+
+    def test_uint_range_enforced_strictly(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "U",
+                "inputs": [{"indexed": True, "name": "v", "type": "uint8"}],
+            }
+        )
+        self._invalid(event, [256])
+        self._invalid(event, [-1])
+
+    def test_int_range_enforced_strictly(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "I",
+                "inputs": [{"indexed": True, "name": "v", "type": "int8"}],
+            }
+        )
+        self._invalid(event, [128])
+        self._invalid(event, [-129])
+
+    def test_bool_requires_python_bool(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "B",
+                "inputs": [{"indexed": True, "name": "v", "type": "bool"}],
+            }
+        )
+        self._invalid(event, [0])
+        self._invalid(event, [1])
+
+    def test_bytesM_requires_exact_length(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "M",
+                "inputs": [{"indexed": True, "name": "v", "type": "bytes4"}],
+            }
+        )
+        self._invalid(event, [b"abc"])
+        self._invalid(event, [b"abcde"])
+        self._invalid(event, ["abcd"])
+
+    def test_string_and_bytes_types_strict(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "S",
+                "inputs": [
+                    {"indexed": True, "name": "s", "type": "string"},
+                    {"indexed": True, "name": "r", "type": "bytes"},
+                ],
+            }
+        )
+        self._invalid(event, [1, b""])
+        self._invalid(event, ["x", "y"])
+        self._invalid(event, [b"x", b""])
+
+    def test_array_requires_list_and_respects_length(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Ar",
+                "inputs": [{"indexed": True, "name": "v", "type": "uint256[]"}],
+            }
+        )
+        self._invalid(event, [(1, 2)])
+        self._invalid(event, ["x"])
+        fixed = parse_event_abi(
+            {
+                "type": "event",
+                "name": "F",
+                "inputs": [{"indexed": True, "name": "v", "type": "uint256[2]"}],
+            }
+        )
+        self._invalid(fixed, [[1]])
+        self._invalid(fixed, [[1, 2, 3]])
+        self._invalid(fixed, [(1, 2)])
+
+    def test_array_element_type_mismatch(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Ar",
+                "inputs": [{"indexed": True, "name": "v", "type": "uint256[]"}],
+            }
+        )
+        self._invalid(event, [["x"]])
+        self._invalid(event, [[True]])
+
+    def test_tuple_requires_tuple_and_length(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "T",
+                "inputs": [
+                    {
+                        "indexed": True,
+                        "name": "p",
+                        "type": "tuple",
+                        "components": [
+                            {"name": "x", "type": "uint256"},
+                            {"name": "s", "type": "string"},
+                        ],
+                    }
+                ],
+            }
+        )
+        self._invalid(event, [[5, "hi"]])
+        self._invalid(event, [(5,)])
+        self._invalid(event, [(5, "hi", 1)])
+        self._invalid(event, [("x", "hi")])
+
+    def test_non_indexed_data_value_invalid(self):
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "D",
+                "inputs": [{"indexed": False, "name": "v", "type": "uint8"}],
+            }
+        )
+        self._invalid(event, [256])
+        self._invalid(event, ["1"])
+
+    def test_no_value_layer_exceptions_leak(self):
+        from abi_kit import ABIValueError, ABITypeError
+
+        event = parse_event_abi(
+            {
+                "type": "event",
+                "name": "Mix",
+                "inputs": [
+                    {"indexed": True, "name": "a", "type": "uint8"},
+                    {"indexed": False, "name": "b", "type": "string"},
+                ],
+            }
+        )
+        for bad_values in (
+            "x",
+            [1],
+            [1, 2],
+            [256, "ok"],
+            [1, 2],
+            [1, b"ok"],
+        ):
+            try:
+                encode_event_log(event, bad_values)
+            except AbiEventError as exc:
+                self.assertEqual(exc.code, "EVENT_VALUE_INVALID")
+            except (ABIValueError, ABITypeError) as exc:
+                raise AssertionError(f"值层异常泄漏：{exc!r}")
+            else:
+                raise AssertionError("非法输入未抛错")
 
 
 if __name__ == "__main__":
