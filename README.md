@@ -1,7 +1,7 @@
 # ABI Kit
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
-嵌套值的路径化读取与定点替换。
+嵌套值的路径化读取与定点替换、函数调用 calldata 编解码。
 
 ## 范围
 
@@ -42,6 +42,29 @@
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
     非 NIST SHA3），无第三方依赖。
+- 已实现：函数 ABI、selector 与函数调用 calldata 编解码。
+  - `parse_function_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，只消费
+    `type == "function"` 条目，返回不可变 `FunctionDefinition`；event /
+    constructor / error / receive / fallback 条目跳过不解析。
+  - `canonical_function_signature(function)`：返回
+    `name(type1,type2,...)` 规范签名；`function_selector(function)` 返回
+    `keccak256(签名)[:4]` 四字节 selector。
+  - `encode_function_call(abi, function_name, args=None)`（别名
+    `encodeFunctionCall`）：`function_name` 接受函数名（无同名重载时）或
+    规范函数签名；`args` 为按公开参数顺序的实参列表。返回
+    `EncodedFunctionCall`（`function` / `selector` / `calldata`，以及
+    `function_name` / `signature` / `selector_hex` / `calldata_hex`
+    属性）。
+  - `decode_function_call(abi, calldata)`（别名 `decodeFunctionCall`）：
+    `calldata` 接受 `bytes` 或可选 `0x` 前缀的十六进制字符串；按 selector
+    还原函数，严格解码参数 tuple，返回 `DecodedFunctionCall`（`function` /
+    `selector` / `args`，以及 `function_name` / `signature` /
+    `selector_hex` / `values` 属性）。`args` 每项为带类型标注的
+    `FunctionArgument(name, type, value)`，`type` 是不含空白的规范类型
+    字符串；tuple 参数名随类型对象保留，可用于字段寻址。
+  - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；相同输入
+    得到相同字节，解码后按原声明类型重编码得到相同 calldata，动态值与
+    静态值均可稳定往返。
 
 ## 路径
 
@@ -87,6 +110,24 @@
   | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不一致 |
   | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
   | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
+
+- 函数调用路径的六类失败（均为独立的 `ValueError` 子类；值不匹配仍抛
+  既有 `ABIValueError`，别名 `AbiValueError`）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `AbiMetadataError` | ABI 根非法、function 条目缺 name/type/inputs、标识符非法、参数类型字符串无法解析，或规范签名无法生成 selector |
+  | `AbiFunctionNotFoundError` | 按函数名或规范签名找不到函数 |
+  | `AbiOverloadError` | 只给函数名但同名重载不止一个，无法唯一选择 |
+  | `AbiSelectorError` | calldata 的四字节 selector 在 ABI 中匹配不到函数 |
+  | `AbiCalldataLengthError` | calldata 少于四字节 |
+  | `AbiTrailingDataError` | 参数按声明类型消费完后仍有尾随字节 |
+
+  实参不能按声明类型编码（含数量不符）、或参数区不能严格解码时抛
+  `ABIValueError`（`AbiValueError` 为同一异常的别名）。空 calldata、
+  未知 selector、错误函数名、歧义重载与尾随字节各自只得到上述唯一结果。
+  ABI 同时包含函数与事件时，函数入口只消费 function 条目，事件 topic 与
+  日志解码行为不变。
 
 ## 约定
 

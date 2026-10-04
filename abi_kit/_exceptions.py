@@ -2,12 +2,19 @@
 
 - ABITypeError：无效的 ABI 类型字符串或类型对象（类型层）。
 - ABIValueError：值与类型不匹配、编码数据非法或类型对象不适用于值层
-  操作（值层）。
+  操作（值层）；函数调用实参不能按声明类型编码或解码时同样抛出。
 - AbiPathError：路径语法非法或按路径读取/定点替换失败（路径层）。
 - AbiEventError：事件 ABI 非法或日志（topics/data）还原、校验失败
   （事件层）。
+- AbiMetadataError：函数 ABI 元数据非法（条目缺 name/type/inputs、
+  类型字符串无法解析、规范签名无法生成 selector 等）。
+- AbiFunctionNotFoundError：按函数名或规范签名找不到函数条目。
+- AbiOverloadError：只给函数名但存在多个同名重载，无法唯一选择。
+- AbiSelectorError：calldata 的四字节 selector 在 ABI 中匹配不到函数。
+- AbiCalldataLengthError：calldata 少于四字节，无法读取 selector。
+- AbiTrailingDataError：参数按声明类型解码完成后仍有尾随字节。
 
-四者各自独立，均为 ValueError 子类。
+所有异常各自独立，均为 ValueError 子类。
 """
 
 
@@ -79,3 +86,37 @@ class AbiEventError(ValueError):
             raise ValueError(f"未知的事件错误码：{code!r}")
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+class AbiMetadataError(ValueError):
+    """函数 ABI 元数据非法。
+
+    触发情形：ABI 根不是数组、function 条目缺 name/type/inputs、
+    name 不是合法标识符、参数描述非法、类型字符串无法解析，或规范
+    函数签名无法生成 selector。
+    """
+
+
+class AbiFunctionNotFoundError(ValueError):
+    """按函数名或规范签名在 ABI 中找不到函数条目。"""
+
+
+class AbiOverloadError(ValueError):
+    """只给函数名但同名重载不止一个，无法唯一选择。"""
+
+
+class AbiSelectorError(ValueError):
+    """calldata 的四字节 selector 在 ABI 中匹配不到任何函数。"""
+
+
+class AbiCalldataLengthError(ValueError):
+    """calldata 少于四字节，无法读取 selector。"""
+
+
+class AbiTrailingDataError(ValueError):
+    """参数解码完成后仍有尾随字节未被消费。"""
+
+
+#: 函数调用路径对值层异常的公开名称；与既有 ABIValueError 是同一个类，
+#: 已有的类型解析/值编解码/路径/事件入口行为不受影响。
+AbiValueError = ABIValueError
