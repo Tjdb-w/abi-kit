@@ -12,15 +12,22 @@
   的完整 calldata。
 - :func:`decode_function_call`：按 calldata 前四字节还原函数，再严格解码
   参数 tuple，返回函数标识、规范签名与带类型标注的参数结果。
+- :func:`encode_function_result`：按函数名（无重载时）或规范签名选择函数，
+  按 ``outputs`` 顺序编码返回值 tuple（无 selector 前缀）。
+- :func:`decode_function_result`：按函数名或规范签名选定函数，再严格解码
+  其 ``outputs`` tuple，返回函数标识与带类型标注的返回值结果。
 
-``encodeFunctionCall`` / ``decodeFunctionCall`` 是上述两个入口的
+``outputs`` 不参与规范签名与 selector，仅用于返回值编解码。
+
+``encodeFunctionCall`` / ``decodeFunctionCall`` /
+``encodeFunctionResult`` / ``decodeFunctionResult`` 是上述四个入口的
 camelCase 别名。
 
 错误约定：
 
 - 元数据非法（ABI 根不是数组、function 条目缺 name/type/inputs、
-  标识符非法、参数类型字符串无法解析等）抛
-  :class:`abi_kit.AbiMetadataError`；
+  outputs 不是数组或参数元数据非法、标识符非法、参数类型字符串无法
+  解析等）抛 :class:`abi_kit.AbiMetadataError`；
 - 函数名或规范签名无匹配抛 :class:`abi_kit.AbiFunctionNotFoundError`；
 - 只给函数名但同名重载不止一个、无法唯一选择抛
   :class:`abi_kit.AbiOverloadError`；
@@ -82,11 +89,15 @@ class FunctionDefinition:
     """不可变函数定义。
 
     - ``name``：非空 ASCII 函数标识符；
-    - ``inputs``：按声明顺序保存的 :class:`FunctionParameter`。
+    - ``inputs``：按声明顺序保存的公开参数 :class:`FunctionParameter`；
+    - ``outputs``：按声明顺序保存的返回值 :class:`FunctionParameter`，
+      无 ``outputs`` 或为空数组时为空 tuple；``outputs`` 不参与规范签名
+      与 selector，仅用于返回值编解码。
     """
 
     name: str
     inputs: tuple[FunctionParameter, ...] = field(default=())
+    outputs: tuple[FunctionParameter, ...] = field(default=())
 
 
 @dataclass(frozen=True)
@@ -171,6 +182,60 @@ class DecodedFunctionCall:
         return tuple(arg.value for arg in self.args)
 
 
+@dataclass(frozen=True)
+class EncodedFunctionResult:
+    """函数返回值编码结果（不含 selector）。
+
+    - ``function``：命中的 :class:`FunctionDefinition`；
+    - ``data``：``outputs`` tuple 的 ABI 编码，无 outputs 时为空字节串。
+    """
+
+    function: FunctionDefinition
+    data: bytes = b""
+
+    @property
+    def function_name(self) -> str:
+        """命中函数的名称。"""
+        return self.function.name
+
+    @property
+    def signature(self) -> str:
+        """命中函数的规范签名（仅由 inputs 决定），如 ``transfer(address,uint256)``。"""
+        return canonical_function_signature(self.function)
+
+    @property
+    def data_hex(self) -> str:
+        """``data`` 的小写 ``"0x"`` 前缀十六进制字符串。"""
+        return "0x" + self.data.hex()
+
+
+@dataclass(frozen=True)
+class DecodedFunctionResult:
+    """函数返回值解码结果。
+
+    - ``function``：命中的 :class:`FunctionDefinition`；
+    - ``outputs``：按声明顺序排列的带类型标注 :class:`FunctionArgument`。
+    """
+
+    function: FunctionDefinition
+    outputs: tuple[FunctionArgument, ...] = field(default=())
+
+    @property
+    def function_name(self) -> str:
+        """命中函数的名称。"""
+        return self.function.name
+
+    @property
+    def signature(self) -> str:
+        """命中函数的规范签名（仅由 inputs 决定），如 ``transfer(address,uint256)``。"""
+        return canonical_function_signature(self.function)
+
+    @property
+    def values(self) -> tuple:
+        """按声明顺序去掉类型标注后的纯值 tuple（与 outputs 等价）。"""
+        return tuple(arg.value for arg in self.outputs)
+
+
 # ---- ABI 解析 -------------------------------------------------------------
 
 
@@ -178,36 +243,51 @@ def _metadata(message: str) -> AbiMetadataError:
     return AbiMetadataError(message)
 
 
+def _parse_parameter_list(name: str, node: dict, key: str, required: bool):
+    """解析函数条目的 inputs/outputs 参数列表为不可变参数 tuple。"""
+    label = "参数" if key == "inputs" else "返回值"
+    if key not in node:
+        if required:
+            raise _metadata(f"函数 {name!r} 缺少 {key}")
+        return ()
+    params_node = node[key]
+    if not isinstance(params_node, (list, tuple)):
+        raise _metadata(f"函数 {name!r} 的 {key} 必须是数组")
+
+    parameters: list[FunctionParameter] = []
+    for param_node in params_node:
+        if not isinstance(param_node, dict):
+            raise _metadata(
+                f"函数 {name!r} 的{label}必须是 JSON 对象，"
+                f"得到 {type(param_node).__name__}"
+            )
+        param_name = param_node.get("name", "")
+        if not isinstance(param_name, str):
+            raise _metadata(
+                f"函数 {name!r} 的{label} name 必须是字符串，"
+                f"得到 {param_name!r}"
+            )
+        try:
+            # 与事件路径共用同一套 type + components 递归展开；其失败
+            # 统一是事件层错误码，这里转译为函数元数据错误。
+            abi_type = _build_type(param_node)
+        except (AbiEventError, ABITypeError) as exc:
+            raise _metadata(f"函数 {name!r} 的{label}类型非法：{exc}") from None
+        parameters.append(FunctionParameter(param_name, abi_type))
+    return tuple(parameters)
+
+
 def _parse_function_entry(entry: dict) -> FunctionDefinition:
     """从单个 ABI function 条目构造不可变函数定义。"""
     name = entry.get("name")
     if not _is_identifier(name):
         raise _metadata(f"函数 name 必须是非空 ASCII 标识符，得到 {name!r}")
-    if "inputs" not in entry:
-        raise _metadata(f"函数 {name!r} 缺少 inputs")
-    inputs_node = entry["inputs"]
-    if not isinstance(inputs_node, (list, tuple)):
-        raise _metadata(f"函数 {name!r} 的 inputs 必须是数组")
 
-    parameters: list[FunctionParameter] = []
-    for node in inputs_node:
-        if not isinstance(node, dict):
-            raise _metadata(
-                f"函数 {name!r} 的参数必须是 JSON 对象，得到 {type(node).__name__}"
-            )
-        param_name = node.get("name", "")
-        if not isinstance(param_name, str):
-            raise _metadata(
-                f"函数 {name!r} 的参数 name 必须是字符串，得到 {param_name!r}"
-            )
-        try:
-            # 与事件路径共用同一套 type + components 递归展开；其失败
-            # 统一是事件层错误码，这里转译为函数元数据错误。
-            abi_type = _build_type(node)
-        except (AbiEventError, ABITypeError) as exc:
-            raise _metadata(f"函数 {name!r} 的参数类型非法：{exc}") from None
-        parameters.append(FunctionParameter(param_name, abi_type))
-    return FunctionDefinition(name, tuple(parameters))
+    inputs = _parse_parameter_list(name, entry, "inputs", required=True)
+    # outputs 缺省视为空列表；其元数据与 inputs 同口径严格校验，但不参与
+    # 规范签名与 selector。
+    outputs = _parse_parameter_list(name, entry, "outputs", required=False)
+    return FunctionDefinition(name, inputs, outputs)
 
 
 def parse_function_abi(abi) -> tuple[FunctionDefinition, ...]:
@@ -427,6 +507,101 @@ def decode_function_call(abi, calldata) -> DecodedFunctionCall:
     return DecodedFunctionCall(function, selector, arguments)
 
 
+# ---- 返回值编解码 ---------------------------------------------------------
+
+
+def _coerce_result_data(data) -> bytes:
+    """把返回值 bytes 或可选 0x 前缀的十六进制字符串规范化为 bytes。"""
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, str):
+        text = data[2:] if data[:2] in ("0x", "0X") else data
+        if len(text) % 2:
+            raise ABIValueError(
+                f"返回值十六进制长度必须为偶数，得到 {len(text)} 个字符"
+            )
+        try:
+            return bytes.fromhex(text)
+        except ValueError as exc:
+            raise ABIValueError(f"返回值十六进制非法：{exc}") from exc
+    raise ABIValueError(
+        f"返回值必须是 bytes 或十六进制 str，得到 {type(data).__name__}"
+    )
+
+
+def encode_function_result(
+    abi, function_name, values=None
+) -> EncodedFunctionResult:
+    """编码一次函数返回值（不含 selector）。
+
+    ``abi`` 接受 ABI JSON 字符串或等价条目数组；``function_name`` 接受
+    函数名（ABI 中无同名重载时）或规范函数签名；``values`` 为按
+    ``outputs`` 声明顺序排列的返回值序列（list/tuple），无 outputs 的
+    函数只能传空序列（或省略）。``outputs`` 不参与规范签名与 selector。
+
+    返回 :class:`EncodedFunctionResult`，其中 ``data`` 为返回值组成的
+    tuple 标准 ABI 编码，无 outputs 时为 ``b""``。返回值数量或类型与
+    ``outputs`` 不符抛 :class:`abi_kit.ABIValueError`。
+    """
+    functions = parse_function_abi(abi)
+    function = _resolve_function(functions, function_name)
+
+    if values is None:
+        result_values = ()
+    elif isinstance(values, (list, tuple)):
+        result_values = tuple(values)
+    else:
+        raise ABIValueError(
+            f"返回值序列必须是 list 或 tuple，得到 {type(values).__name__}"
+        )
+
+    output_types = TupleType(
+        tuple(parameter.abi_type for parameter in function.outputs)
+    )
+    data = _encode(output_types, result_values)
+    return EncodedFunctionResult(function, data)
+
+
+def decode_function_result(abi, function_name, data) -> DecodedFunctionResult:
+    """按函数的 ``outputs`` 严格解码返回值数据。
+
+    ``data`` 接受 bytes 或可选 ``0x`` 前缀的偶数位十六进制字符串，按
+    ``function_name``（函数名，无同名重载时；或规范函数签名）选定函数后，
+    以其 ``outputs`` 组成的 tuple 严格 ABI 解码。返回
+    :class:`DecodedFunctionResult`，携带函数定义、规范签名（属性）与按
+    声明顺序排列的带类型标注返回值；无 outputs 的函数要求 ``data`` 为
+    ``b""``（或 ``"0x"``）。
+
+    ``data`` 类型或十六进制非法、长度不足、head/tail 布局、偏移、长度、
+    补零、UTF-8、定长数组约束不满足均抛 :class:`abi_kit.ABIValueError`；
+    返回值 tuple 消费完后仍有尾随字节抛
+    :class:`abi_kit.AbiTrailingDataError`。
+    """
+    functions = parse_function_abi(abi)
+    function = _resolve_function(functions, function_name)
+    raw = _coerce_result_data(data)
+
+    output_types = TupleType(
+        tuple(parameter.abi_type for parameter in function.outputs)
+    )
+    bound = len(raw)
+    values, end = _decode(output_types, raw, 0, bound)
+    if end != bound:
+        raise AbiTrailingDataError(
+            f"返回值解码完成后仍有 {bound - end} 字节尾随数据未被消费"
+        )
+
+    arguments = tuple(
+        FunctionArgument(
+            parameter.name, format_abi_type(parameter.abi_type), value
+        )
+        for parameter, value in zip(function.outputs, values)
+    )
+    return DecodedFunctionResult(function, arguments)
+
+
 # camelCase 公开别名。
 encodeFunctionCall = encode_function_call
 decodeFunctionCall = decode_function_call
+encodeFunctionResult = encode_function_result
+decodeFunctionResult = decode_function_result

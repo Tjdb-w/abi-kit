@@ -7,7 +7,7 @@
 - AbiEventError：事件 ABI 非法或日志（topics/data）还原、校验失败
   （事件层）。
 - AbiMetadataError：函数 ABI 元数据非法（条目缺 name/type/inputs、
-  类型字符串无法解析、规范签名无法生成 selector 等）。
+  outputs 元数据非法、类型字符串无法解析、规范签名无法生成 selector 等）。
 - AbiFunctionNotFoundError：按函数名或规范签名找不到函数条目。
 - AbiOverloadError：只给函数名但存在多个同名重载，无法唯一选择。
 - AbiSelectorError：calldata 的四字节 selector 在 ABI 中匹配不到函数。
@@ -96,8 +96,9 @@ class AbiMetadataError(ValueError):
     """函数 ABI 元数据非法。
 
     触发情形：ABI 根不是数组、function 条目缺 name/type/inputs、
-    name 不是合法标识符、参数描述非法、类型字符串无法解析，或规范
-    函数签名无法生成 selector。
+    outputs 不是数组或返回值元数据非法、name 不是合法标识符、
+    参数或返回值描述非法、类型字符串无法解析，或规范函数签名无法
+    生成 selector。
     """
 
 
@@ -118,7 +119,7 @@ class AbiCalldataLengthError(ValueError):
 
 
 class AbiTrailingDataError(ValueError):
-    """参数解码完成后仍有尾随字节未被消费。"""
+    """参数或返回值按声明类型解码完成后仍有尾随字节未被消费。"""
 
 
 #: 函数调用路径对值层异常的公开名称；与既有 ABIValueError 是同一个类，
