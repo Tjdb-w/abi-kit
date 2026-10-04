@@ -79,6 +79,21 @@
   - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；相同输入
     得到相同字节，解码后按原声明类型重编码得到相同 calldata，动态值与
     静态值均可稳定往返。
+- 已实现：函数返回值（outputs）编解码。
+  - `encode_function_result(abi, function_name, values=None)`（别名
+    `encodeFunctionResult`）：按 outputs 声明顺序接受 list 或 tuple，
+    返回不可变 `EncodedFunctionResult`（`function` / `data`，以及
+    `function_name` / `signature` / `data_hex` 属性）；无 outputs 的
+    函数只接受空序列，编码为 `b""`。
+  - `decode_function_result(abi, function_name, data)`（别名
+    `decodeFunctionResult`）：`data` 接受 `bytes` 或可选 `0x` 前缀的
+    偶数位十六进制字符串，严格解码 outputs tuple，返回不可变
+    `DecodedFunctionResult`（`function` / `outputs`，以及
+    `function_name` / `signature` / `values` 属性）；`outputs` 每项为
+    `FunctionArgument(name, type, value)`。解码后仍有尾随字节抛
+    `AbiTrailingDataError`。
+  - outputs 不参与规范签名、selector 与 calldata；函数选择、元数据与
+    值层错误约定同 calldata 路径。
 
 ## 路径
 

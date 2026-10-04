@@ -10,7 +10,9 @@
   encode_event_log）；
 - 函数 ABI 解析、selector 与函数调用 calldata 编解码
   （parse_function_abi / function_selector / canonical_function_signature /
-  encode_function_call / decode_function_call）。
+  encode_function_call / decode_function_call）；
+- 函数返回值（outputs）编解码
+  （encode_function_result / decode_function_result）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
@@ -45,15 +47,21 @@ from ._exceptions import (
 from ._format import format_abi_type
 from ._function import (
     DecodedFunctionCall,
+    DecodedFunctionResult,
     EncodedFunctionCall,
+    EncodedFunctionResult,
     FunctionArgument,
     FunctionDefinition,
     FunctionParameter,
     canonical_function_signature,
     decode_function_call,
+    decode_function_result,
     decodeFunctionCall,
+    decodeFunctionResult,
     encode_function_call,
+    encode_function_result,
     encodeFunctionCall,
+    encodeFunctionResult,
     function_selector,
     parse_function_abi,
 )
@@ -94,6 +102,8 @@ __all__ = [
     "FunctionArgument",
     "EncodedFunctionCall",
     "DecodedFunctionCall",
+    "EncodedFunctionResult",
+    "DecodedFunctionResult",
     "parse_function_abi",
     "canonical_function_signature",
     "function_selector",
@@ -101,4 +111,8 @@ __all__ = [
     "decode_function_call",
     "encodeFunctionCall",
     "decodeFunctionCall",
+    "encode_function_result",
+    "decode_function_result",
+    "encodeFunctionResult",
+    "decodeFunctionResult",
 ]
