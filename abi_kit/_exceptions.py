@@ -6,8 +6,17 @@
 - AbiPathError：路径语法非法或按路径读取/定点替换失败（路径层）。
 - AbiEventError：事件 ABI 非法或日志（topics/data）还原、校验失败
   （事件层）。
+- AbiMetadataError：函数 ABI 元数据非法（条目缺 name/type/inputs、
+  类型字符串无法解析、规范签名无法生成 selector 等）。
+- AbiFunctionNotFoundError：ABI 中找不到指定名称或规范签名的函数。
+- AbiOverloadError：只给函数名但存在多个重载，无法唯一选择。
+- AbiSelectorError：calldata 的四字节 selector 匹配不到任何函数。
+- AbiCalldataLengthError：calldata 不足四字节，无法读取 selector。
+- AbiValueError：函数实参不能按声明类型编码，或 calldata 主体不能
+  按声明参数类型严格解码。
+- AbiTrailingDataError：calldata 主体被完整消费后仍有尾随字节。
 
-四者各自独立，均为 ValueError 子类。
+均为 ValueError 子类，各自独立。
 """
 
 
@@ -79,3 +88,36 @@ class AbiEventError(ValueError):
             raise ValueError(f"未知的事件错误码：{code!r}")
         self.code = code
         super().__init__(f"{code}: {message}")
+
+
+class AbiMetadataError(ValueError):
+    """函数 ABI 元数据非法。
+
+    触发情形包括：ABI 不是条目序列、条目不是对象、function 条目缺
+    ``name``/``type``/``inputs``、参数描述非法、类型字符串无法解析、
+    规范签名无法计算 selector，或用于选择函数的规范签名非法。
+    """
+
+
+class AbiFunctionNotFoundError(ValueError):
+    """ABI 中找不到指定名称或规范签名的函数。"""
+
+
+class AbiOverloadError(ValueError):
+    """只提供函数名但存在多个同名重载，无法唯一选择。"""
+
+
+class AbiSelectorError(ValueError):
+    """calldata 的四字节 selector 在 ABI 的函数条目中匹配不到。"""
+
+
+class AbiCalldataLengthError(ValueError):
+    """calldata 不足四字节，无法读取 selector。"""
+
+
+class AbiValueError(ValueError):
+    """函数实参不能按声明类型编码，或 calldata 主体不能严格解码。"""
+
+
+class AbiTrailingDataError(ValueError):
+    """calldata 主体被完整消费后仍有尾随字节。"""

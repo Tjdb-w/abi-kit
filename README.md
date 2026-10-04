@@ -1,7 +1,7 @@
 # ABI Kit
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
-嵌套值的路径化读取与定点替换。
+嵌套值的路径化读取与定点替换、函数调用 calldata 编解码。
 
 ## 范围
 
@@ -42,6 +42,26 @@
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
     非 NIST SHA3），无第三方依赖。
+- 已实现：函数 ABI、四字节 selector 与函数调用编解码。
+  - `encode_function_call(abi, name_or_signature, args)`（别名
+    `encodeFunctionCall`）：`abi` 接受 ABI JSON 字符串或等价条目数组；
+    函数选择接受函数名（ABI 中唯一时）或规范函数签名
+    `name(type1,type2,...)`（重载时必须用签名）；实参按公开参数顺序
+    编码。返回 `FunctionCallEncoding(selector, calldata)`：`selector`
+    为四字节，`calldata` 为 `selector + 参数主体` 的完整字节。
+  - `decode_function_call(abi, calldata)`（别名 `decodeFunctionCall`）：
+    `calldata` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
+    按 selector 还原函数，返回
+    `FunctionCallResult(name, signature, selector, inputs, args)`：
+    `inputs` 为带类型标注的 `FunctionParameter(name, abi_type)` 序列，
+    `args` 为按声明顺序还原的实参 tuple。空 calldata 或不足四字节抛
+    `AbiCalldataLengthError`，未知 selector 抛 `AbiSelectorError`，
+    尾随字节抛 `AbiTrailingDataError`。
+  - 输入类型支持 tuple（由 `components` 递归展开）、定长数组、动态数组
+    及其任意嵌套；函数入口只消费 `type == "function"` 的条目，
+    event/constructor/error 条目不参与也不影响事件日志还原。
+  - 相同输入得到相同字节与结构结果；解码结果按原声明类型重新编码得到
+    相同 calldata，动态/静态值稳定往返。
 
 ## 路径
 
@@ -87,6 +107,18 @@
   | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不一致 |
   | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
   | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
+
+- 函数调用路径的七类失败，各自为独立异常（均为 `ValueError` 子类）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `AbiMetadataError` | ABI/function 条目缺 `name`、`type`、`inputs`，类型字符串无法解析，或规范签名无法生成 selector |
+  | `AbiFunctionNotFoundError` | 找不到指定函数名或规范签名 |
+  | `AbiOverloadError` | 只给函数名且存在多个重载，未用规范签名消歧 |
+  | `AbiSelectorError` | calldata 的四字节 selector 匹配不到函数 |
+  | `AbiCalldataLengthError` | calldata 少于四字节（含空 calldata） |
+  | `AbiValueError` | 实参不能按声明类型编码，或 calldata 主体不能严格解码 |
+  | `AbiTrailingDataError` | 参数主体消费完后仍有尾随字节 |
 
 ## 约定
 
