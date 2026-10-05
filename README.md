@@ -111,6 +111,29 @@
     `AbiTrailingDataError`。
   - outputs 不参与规范签名、selector 与 calldata；函数选择、元数据与
     值层错误约定同 calldata 路径。
+- 已实现：Solidity custom error ABI、selector 与 revert data 编解码。
+  - `parse_error_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，只消费
+    `type == "error"` 条目，按 ABI 声明顺序返回不可变
+    `ErrorDefinition`；function / event / constructor / receive /
+    fallback 条目跳过不解析。error 规范签名不得重复。
+  - `canonical_error_signature(error)`：返回
+    `name(type1,type2,...)` 规范签名（参数名不参与）；
+    `error_selector(error)` 返回 `keccak256(签名)[:4]` 四字节 selector。
+  - `encode_error_data(abi, error_name, args=None)`：`error_name` 接受
+    error 名（无同名重载时）或规范 error 签名；`args` 为按 inputs
+    声明顺序的实参列表。返回不可变 `EncodedErrorData`
+    （`error` / `selector` / `data`，以及 `error_name` / `signature` /
+    `selector_hex` / `data_hex` 属性）；`data` 为 selector 加参数 tuple
+    的 ABI 编码，无参 error 只有四字节 selector。
+  - `decode_error_data(abi, data)`：`data` 接受 `bytes` 或可选 `0x`
+    前缀的偶数位十六进制字符串；按 selector 还原 error，严格解码参数
+    tuple，返回不可变 `DecodedErrorData`（`error` / `selector` /
+    `args`，以及 `name`（同义 `error_name`）/ `signature` /
+    `selector_hex` / `values` 属性）。`args` 每项为带类型标注的
+    `ErrorArgument(name, type, value)`；无参 error 解码得到空 tuple。
+  - inputs 支持与 `ABIType` 一致的基础类型、数组与 `components` 嵌套
+    tuple；值口径与 `encode_abi_value` / `decode_abi_value` 完全一致，
+    动态值与静态值均可稳定往返。严格解码口径与函数、事件路径不变。
 
 ## 路径
 
@@ -189,6 +212,23 @@
   未知 selector、错误函数名、歧义重载与尾随字节各自只得到上述唯一结果。
   ABI 同时包含函数与事件时，函数入口只消费 function 条目，事件 topic 与
   日志解码行为不变。
+
+- custom error 路径的六类失败（均为独立的 `ValueError` 子类；实参/数据
+  值不匹配仍抛既有 `ABIValueError`）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `AbiMetadataError` | ABI 根非法、error 条目缺 name/type/inputs、标识符非法、参数类型字符串无法解析，或 error 规范签名重复 |
+  | `AbiErrorNotFoundError` | 按 error 名或规范签名找不到 error |
+  | `AbiErrorOverloadError` | 只给 error 名但同名重载不止一个，无法唯一选择 |
+  | `AbiErrorSelectorError` | revert data 的四字节 selector 在 ABI 中匹配不到 error |
+  | `AbiErrorDataLengthError` | revert data 少于四字节 |
+  | `AbiErrorTrailingDataError` | 参数按声明类型消费完后仍有尾随字节 |
+
+  实参不能按声明类型编码（含数量不符）、`data` 不是 bytes 或可选 `0x`
+  前缀的偶数位十六进制字符串、或参数区不能严格解码时抛 `ABIValueError`。
+  ABI 同时包含函数、事件与 error 时，error 入口只消费 error 条目，函数
+  与事件的既有行为不变。
 
 ## 约定
 

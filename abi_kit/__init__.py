@@ -16,6 +16,9 @@
   encode_function_call / decode_function_call）；
 - 函数返回值（outputs）编解码
   （encode_function_result / decode_function_result）。
+- Solidity custom error ABI 解析、selector 与 revert data 编解码
+  （parse_error_abi / canonical_error_signature / error_selector /
+  encode_error_data / decode_error_data）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
@@ -23,7 +26,11 @@ AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事
 分派失败抛出带错误码的 AbiLogDispatchError；函数调用路径的元数据、
 查找、selector、calldata 长度与尾随数据错误分别抛出 AbiMetadataError、
 AbiFunctionNotFoundError、AbiOverloadError、AbiSelectorError、
-AbiCalldataLengthError、AbiTrailingDataError。
+AbiCalldataLengthError、AbiTrailingDataError；custom error 路径的
+元数据、查找、重载、selector、revert data 长度与尾随数据错误分别
+抛出 AbiMetadataError、AbiErrorNotFoundError、AbiErrorOverloadError、
+AbiErrorSelectorError、AbiErrorDataLengthError、
+AbiErrorTrailingDataError。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
@@ -43,6 +50,11 @@ from ._event import (
 )
 from ._exceptions import (
     AbiCalldataLengthError,
+    AbiErrorDataLengthError,
+    AbiErrorNotFoundError,
+    AbiErrorOverloadError,
+    AbiErrorSelectorError,
+    AbiErrorTrailingDataError,
     AbiEventError,
     AbiFunctionNotFoundError,
     AbiLogDispatchError,
@@ -54,6 +66,18 @@ from ._exceptions import (
     AbiValueError,
     ABITypeError,
     ABIValueError,
+)
+from ._error import (
+    DecodedErrorData,
+    EncodedErrorData,
+    ErrorArgument,
+    ErrorDefinition,
+    ErrorParameter,
+    canonical_error_signature,
+    decode_error_data,
+    encode_error_data,
+    error_selector,
+    parse_error_abi,
 )
 from ._format import format_abi_type
 from ._function import (
@@ -93,6 +117,11 @@ __all__ = [
     "AbiSelectorError",
     "AbiCalldataLengthError",
     "AbiTrailingDataError",
+    "AbiErrorNotFoundError",
+    "AbiErrorOverloadError",
+    "AbiErrorSelectorError",
+    "AbiErrorDataLengthError",
+    "AbiErrorTrailingDataError",
     "ABIType",
     "ElementaryType",
     "ArrayType",
@@ -131,4 +160,14 @@ __all__ = [
     "decode_function_result",
     "encodeFunctionResult",
     "decodeFunctionResult",
+    "ErrorDefinition",
+    "ErrorParameter",
+    "ErrorArgument",
+    "EncodedErrorData",
+    "DecodedErrorData",
+    "parse_error_abi",
+    "canonical_error_signature",
+    "error_selector",
+    "encode_error_data",
+    "decode_error_data",
 ]

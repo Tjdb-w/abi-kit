@@ -15,6 +15,13 @@
 - AbiSelectorError：calldata 的四字节 selector 在 ABI 中匹配不到函数。
 - AbiCalldataLengthError：calldata 少于四字节，无法读取 selector。
 - AbiTrailingDataError：参数按声明类型解码完成后仍有尾随字节。
+- AbiErrorNotFoundError：按错误名或规范签名找不到 error 条目。
+- AbiErrorOverloadError：只给错误名但存在多个同名重载，无法唯一选择。
+- AbiErrorSelectorError：revert data 的四字节 selector 在 ABI 中匹配不到
+  error。
+- AbiErrorDataLengthError：revert data 少于四字节，无法读取 selector。
+- AbiErrorTrailingDataError：error 参数按声明类型解码完成后仍有尾随
+  字节。
 
 所有异常各自独立，均为 ValueError 子类。
 """
@@ -160,6 +167,26 @@ class AbiCalldataLengthError(ValueError):
 
 class AbiTrailingDataError(ValueError):
     """参数解码完成后仍有尾随字节未被消费。"""
+
+
+class AbiErrorNotFoundError(ValueError):
+    """按错误名或规范签名在 ABI 中找不到 error 条目。"""
+
+
+class AbiErrorOverloadError(ValueError):
+    """只给错误名但同名重载不止一个，无法唯一选择。"""
+
+
+class AbiErrorSelectorError(ValueError):
+    """revert data 的四字节 selector 在 ABI 中匹配不到任何 error。"""
+
+
+class AbiErrorDataLengthError(ValueError):
+    """revert data 少于四字节，无法读取 error selector。"""
+
+
+class AbiErrorTrailingDataError(ValueError):
+    """error 参数解码完成后仍有尾随字节未被消费。"""
 
 
 #: 函数调用路径对值层异常的公开名称；与既有 ABIValueError 是同一个类，
