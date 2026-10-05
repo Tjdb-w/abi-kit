@@ -21,6 +21,9 @@
   任何 error。
 - AbiErrorDataLengthError：revert data 少于四字节，无法读取 selector。
 - AbiErrorTrailingDataError：error 参数解码完成后仍有尾随字节。
+- AbiDeploymentDataError：部署数据（creation bytecode / deployment data）
+  类型或十六进制非法、deployment data 短于 creation bytecode，或开头
+  与 creation bytecode 逐字节不一致。
 
 所有异常各自独立，均为 ValueError 子类。
 """
@@ -186,6 +189,11 @@ class AbiErrorDataLengthError(ValueError):
 
 class AbiErrorTrailingDataError(ValueError):
     """error 参数解码完成后仍有尾随字节未被消费。"""
+
+
+class AbiDeploymentDataError(ValueError):
+    """creation bytecode / deployment data 类型或十六进制非法，或部署
+    数据的创建字节码前缀长度不足、逐字节核对不一致。"""
 
 
 #: 函数调用路径对值层异常的公开名称；与既有 ABIValueError 是同一个类，

@@ -2,7 +2,7 @@
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
 嵌套值的路径化读取与定点替换、函数调用 calldata 编解码、error revert
-data 编解码。
+data 编解码、合约部署 constructor 参数编解码。
 
 ## 范围
 
@@ -138,6 +138,34 @@ data 编解码。
     tuple。
   - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；函数、
     事件路径行为不变。
+- 已实现：合约部署 constructor ABI 与 deployment data 编解码。
+  - `parse_constructor_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，只
+    消费 `type == "constructor"` 条目，返回不可变
+    `ConstructorDefinition`；ABI 中没有 constructor 条目时返回零输入
+    定义，出现多个 constructor 条目抛 `AbiMetadataError`；function /
+    event / error / receive / fallback 条目跳过不解析。inputs 支持基础
+    类型、数组与 `components` 嵌套 tuple；`payable` /
+    `stateMutability` 等其余字段不参与解析。
+  - `encode_constructor_data(abi, creation_bytecode, args=None)`：按
+    inputs 声明顺序接受实参 list/tuple，参数 tuple 按 ABI 值规则编码后
+    接在规范化 creation bytecode 之后，返回不可变
+    `EncodedDeploymentData`（`constructor` / `args`（纯值 tuple）/
+    `data`，以及 `data_hex` 属性）；零参数时 `data` 就是规范化后的
+    creation bytecode。`creation_bytecode` 接受 `bytes` 或可选 `0x`
+    前缀的偶数位十六进制字符串。
+  - `decode_constructor_data(abi, creation_bytecode, deployment_data)`：
+    `deployment_data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制
+    字符串；先逐字节核对开头与 creation bytecode 一致，再严格解码剩余
+    的完整参数 tuple，返回不可变 `DecodedDeploymentData`
+    （`constructor` / `args` / `data`，以及 `values` / `data_hex`
+    属性）。`args` 每项为带名称与规范类型标注的
+    `ConstructorArgument(name, type, value)`；零参数 constructor 的
+    deployment data 必须恰好等于 creation bytecode，解码为空 tuple。
+  - creation bytecode / deployment data 类型或十六进制非法、数据短于
+    creation bytecode 或前缀不一致抛 `AbiDeploymentDataError`；参数
+    数量、类型或 ABI 编码布局不合法抛 `ABIValueError`；尾随字节抛
+    `AbiTrailingDataError`。静态、动态与嵌套参数稳定往返；函数、事件、
+    error 路径行为不变。
 
 ## 路径
 
@@ -232,6 +260,20 @@ data 编解码。
   revert data 不是 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串时抛
   `ABIValueError`。ABI 同时包含函数、事件与 error 时，各入口只消费
   各自条目，既有函数与事件行为不变。
+
+- 部署（constructor）路径的失败（独立的 `ValueError` 子类；元数据错误
+  与函数/error 路径共用 `AbiMetadataError`，尾随数据共用
+  `AbiTrailingDataError`，值不匹配仍抛既有 `ABIValueError`）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `AbiMetadataError` | ABI 根非法、constructor 条目缺 inputs、参数描述非法、类型字符串无法解析，或出现多个 constructor 条目 |
+  | `AbiDeploymentDataError` | creation bytecode / deployment data 不是 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串，或 deployment data 短于 creation bytecode、开头逐字节核对不一致 |
+  | `AbiTrailingDataError` | constructor 参数按声明类型消费完后仍有尾随字节 |
+
+  实参数量或类型与 inputs 声明不符、参数区 ABI 编码布局不合法时抛
+  `ABIValueError`。ABI 同时包含函数、事件、error 与 constructor 时，
+  各入口只消费各自条目，既有行为不变。
 
 ## 约定
 
