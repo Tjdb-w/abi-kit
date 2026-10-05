@@ -18,7 +18,10 @@
   （encode_function_result / decode_function_result）；
 - Solidity error ABI 解析、selector 与 revert data 编解码
   （parse_error_abi / canonical_error_signature / error_selector /
-  encode_error_data / decode_error_data）。
+  encode_error_data / decode_error_data）；
+- 合约部署阶段的 constructor 参数编解码
+  （parse_constructor_abi / encode_constructor_data /
+  decode_constructor_data）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
@@ -29,10 +32,23 @@ AbiFunctionNotFoundError、AbiOverloadError、AbiSelectorError、
 AbiCalldataLengthError、AbiTrailingDataError；error 路径的查找、重载、
 selector、数据长度与尾随数据错误分别抛出 AbiErrorNotFoundError、
 AbiErrorOverloadError、AbiErrorSelectorError、AbiErrorDataLengthError、
-AbiErrorTrailingDataError（元数据错误与函数路径共用 AbiMetadataError）。
+AbiErrorTrailingDataError（元数据错误与函数路径共用 AbiMetadataError）；
+部署路径的 creation bytecode / deployment data 类型、十六进制、长度
+与前缀不一致错误抛出 AbiDeploymentDataError（元数据错误同样共用
+AbiMetadataError，尾随数据错误共用 AbiTrailingDataError）。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
+from ._constructor import (
+    ConstructorArgument,
+    ConstructorDefinition,
+    ConstructorParameter,
+    DecodedDeploymentData,
+    EncodedDeploymentData,
+    decode_constructor_data,
+    encode_constructor_data,
+    parse_constructor_abi,
+)
 from ._contract import (
     EventRegistry,
     decode_contract_event_log,
@@ -60,6 +76,7 @@ from ._event import (
 )
 from ._exceptions import (
     AbiCalldataLengthError,
+    AbiDeploymentDataError,
     AbiErrorDataLengthError,
     AbiErrorNotFoundError,
     AbiErrorOverloadError,
@@ -120,6 +137,7 @@ __all__ = [
     "AbiErrorSelectorError",
     "AbiErrorDataLengthError",
     "AbiErrorTrailingDataError",
+    "AbiDeploymentDataError",
     "ABIType",
     "ElementaryType",
     "ArrayType",
@@ -167,4 +185,12 @@ __all__ = [
     "error_selector",
     "encode_error_data",
     "decode_error_data",
+    "ConstructorDefinition",
+    "ConstructorParameter",
+    "ConstructorArgument",
+    "EncodedDeploymentData",
+    "DecodedDeploymentData",
+    "parse_constructor_abi",
+    "encode_constructor_data",
+    "decode_constructor_data",
 ]

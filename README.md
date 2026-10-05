@@ -2,7 +2,7 @@
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
 嵌套值的路径化读取与定点替换、函数调用 calldata 编解码、error revert
-data 编解码。
+data 编解码、合约部署 constructor 参数编解码。
 
 ## 范围
 
@@ -138,6 +138,33 @@ data 编解码。
     tuple。
   - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；函数、
     事件路径行为不变。
+- 已实现：合约部署阶段的 constructor 参数编解码。
+  - `parse_constructor_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，
+    只消费 `type == "constructor"` 条目，返回不可变
+    `ConstructorDefinition`（按声明顺序保存 `ConstructorParameter` 的
+    `inputs`）；无 constructor 条目表示零输入构造函数，多个
+    constructor 条目抛 `AbiMetadataError`，function / event / error /
+    receive / fallback 等其他条目跳过不解析。
+  - `encode_constructor_data(abi, creation_bytecode, args=None)`：
+    `creation_bytecode` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制
+    字符串；`args` 为按 inputs 声明顺序的实参 list/tuple。返回不可变
+    `EncodedDeploymentData`（`constructor` / `args` / `data`，以及
+    `data_hex` / `values` 属性），`data` 为
+    `规范化 creation bytecode + 参数 tuple 的 ABI 编码`，零参数时即
+    creation bytecode 本身；`args` 每项为带类型标注的
+    `ConstructorArgument(name, type, value)`，保留声明参数名与规范
+    类型字符串。
+  - `decode_constructor_data(abi, creation_bytecode, deployment_data)`：
+    先逐字节核对 `deployment_data` 开头与 `creation_bytecode` 一致，
+    再对剩余部分按 inputs 组成的 tuple 严格解码，返回不可变
+    `DecodedDeploymentData`（`constructor` / `args` / `data`，以及
+    `data_hex` / `values` 属性）。静态、动态与嵌套参数稳定往返。
+  - 部署路径失败约定：ABI 或 constructor 元数据非法（含多个
+    constructor 条目）抛 `AbiMetadataError`；creation bytecode /
+    deployment data 类型或十六进制非法、deployment data 短于创建
+    字节码或前缀不一致抛 `AbiDeploymentDataError`；实参数量、类型或
+    ABI 编码布局不合法抛 `ABIValueError`；尾随字节抛
+    `AbiTrailingDataError`。既有函数、事件、error 路径行为不变。
 
 ## 路径
 
