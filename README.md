@@ -1,7 +1,8 @@
 # ABI Kit
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
-嵌套值的路径化读取与定点替换、函数调用 calldata 编解码。
+合约事件注册表与批量日志分派还原、嵌套值的路径化读取与定点替换、
+函数调用 calldata 编解码。
 
 ## 范围
 
@@ -56,6 +57,25 @@
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
     非 NIST SHA3），无第三方依赖。
+- 已实现：合约级事件注册表与单条/批量日志分派还原。
+  - `parse_event_registry(abi)`：接收 ABI JSON 字符串或等价条目数组，只
+    保留 `type == "event"` 条目（function / constructor / error /
+    receive / fallback 及缺 type、未知类型的非 event 条目一律跳过），按
+    ABI 顺序构造不可变 `EventRegistry`；事件名、规范类型、indexed、
+    anonymous 与 tuple components 语义同 `parse_event_abi`。两个 event
+    条目的规范签名重复时报注册表非法。
+  - `decode_contract_event_log(registry, log)`：`registry` 接受
+    `EventRegistry` 或原始 ABI（即时解析）；`log` 是映射，`topics` 与
+    `data` 必填，可选 `event` 指定规范签名或唯一事件名。未给 `event`
+    时非匿名事件用 `topics[0]` 匹配 topic0，匿名事件必须显式选择；显式
+    事件与 `topics[0]` 不一致不得解码。返回不可变
+    `DecodedContractEventLog`（`event` / `topics`（规范化 bytes tuple）/
+    `data`（bytes）/ `values`（声明顺序 tuple），以及 `event_name` /
+    `signature` / `topics_hex` / `data_hex` 属性）。`values` 口径与
+    `decode_event_log` 完全一致。
+  - `decode_contract_event_logs(registry, logs)`：`logs` 为 list/tuple，
+    按输入顺序返回等长的结果 tuple；任一条失败立即抛错，不返回部分
+    结果。
 - 已实现：函数 ABI、selector 与函数调用 calldata 编解码。
   - `parse_function_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，只消费
     `type == "function"` 条目，返回不可变 `FunctionDefinition`；event /
@@ -140,6 +160,22 @@
   | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
   | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
   | `EVENT_VALUE_INVALID` | `encode_event_log` 的 event 非 EventDefinition、values 非 list/tuple、数量不符，或任一值与声明类型不匹配 |
+
+- `AbiLogDispatchError`：合约事件注册表与日志分派路径的六类失败，同样
+  通过 `code` 携带错误码：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `LOG_ABI_INVALID` | ABI 根非法、event 条目非法，或规范事件签名重复 |
+  | `LOG_ENTRY_INVALID` | 日志不是映射、缺 topics/data、topics/data/event 字段非法，或命中事件后 topics 数量与 data 不能按声明严格还原 |
+  | `LOG_EVENT_NOT_FOUND` | 显式事件（名或规范签名）不在注册表，或未显式给出时 topics[0] 匹配不到任何非匿名事件 |
+  | `LOG_EVENT_AMBIGUOUS` | 只给事件名但同名事件不止一个，无法唯一选择 |
+  | `LOG_EVENT_REQUIRED` | 匿名事件没有 topic0，未用 event 显式选择 |
+  | `LOG_TOPIC_MISMATCH` | 显式选择的非匿名事件与 topics[0] 的 topic0 不一致 |
+
+  单条与批量入口均只抛上述异常；批量入口任一条失败即整体失败，不返回
+  部分结果。既有单事件入口 `decode_event_log` / `encode_event_log` 的
+  `AbiEventError` 错误码与返回对象不变。
 
 - 函数调用路径的六类失败（均为独立的 `ValueError` 子类；值不匹配仍抛
   既有 `ABIValueError`，别名 `AbiValueError`）：

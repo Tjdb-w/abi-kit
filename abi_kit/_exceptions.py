@@ -6,6 +6,8 @@
 - AbiPathError：路径语法非法或按路径读取/定点替换失败（路径层）。
 - AbiEventError：事件 ABI 非法或日志（topics/data）还原、校验失败
   （事件层）。
+- AbiLogDispatchError：合约级事件注册表非法，或日志按注册表分派、还原
+  失败（合约日志分派层）。
 - AbiMetadataError：函数 ABI 元数据非法（条目缺 name/type/inputs、
   类型字符串无法解析、规范签名无法生成 selector 等）。
 - AbiFunctionNotFoundError：按函数名或规范签名找不到函数条目。
@@ -89,6 +91,43 @@ class AbiEventError(ValueError):
         if code not in self.CODES:
             raise ValueError(f"未知的事件错误码：{code!r}")
         self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+class AbiLogDispatchError(ValueError):
+    """合约级事件注册表非法，或日志按注册表分派/还原失败。
+
+    ``code`` 取下列唯一错误码之一：
+
+    - ``LOG_ABI_INVALID``：注册表 ABI 根非法、event 条目非法，或两个
+      event 条目的规范签名重复；
+    - ``LOG_ENTRY_INVALID``：日志不是映射、缺少 topics/data 或其类型非法，
+      或可选 event 字段不是合法规范签名/事件名；
+    - ``LOG_EVENT_NOT_FOUND``：显式给出的事件（名或规范签名）不在注册表中，
+      或未显式给出时 topics[0] 匹配不到任何非匿名事件；
+    - ``LOG_EVENT_AMBIGUOUS``：只给事件名但同名事件不止一个，无法唯一
+      选择；
+    - ``LOG_EVENT_REQUIRED``：日志没有可用于分派的 topic0（匿名事件），
+      必须用 event 字段显式选择；
+    - ``LOG_TOPIC_MISMATCH``：显式选择的非匿名事件与日志 topics[0] 的
+      topic0 不一致。
+    """
+
+    #: 全部公开错误码。
+    CODES = (
+        "LOG_ABI_INVALID",
+        "LOG_ENTRY_INVALID",
+        "LOG_EVENT_NOT_FOUND",
+        "LOG_EVENT_AMBIGUOUS",
+        "LOG_EVENT_REQUIRED",
+        "LOG_TOPIC_MISMATCH",
+    )
+
+    def __init__(self, code: str, message: str):
+        if code not in self.CODES:
+            raise ValueError(f"未知的合约日志错误码：{code!r}")
+        self.code = code
+        self.message = message
         super().__init__(f"{code}: {message}")
 
 
