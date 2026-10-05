@@ -1,7 +1,8 @@
 # ABI Kit
 
 合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
-嵌套值的路径化读取与定点替换、函数调用 calldata 编解码。
+嵌套值的路径化读取与定点替换、函数调用 calldata 编解码、error revert
+data 编解码。
 
 ## 范围
 
@@ -111,6 +112,32 @@
     `AbiTrailingDataError`。
   - outputs 不参与规范签名、selector 与 calldata；函数选择、元数据与
     值层错误约定同 calldata 路径。
+- 已实现：Solidity error ABI、selector 与 revert data 编解码。
+  - `parse_error_abi(abi)`：解析 ABI JSON 字符串或等价条目数组，只消费
+    `type == "error"` 条目，按声明顺序返回不可变 `ErrorDefinition`；
+    function / event / constructor / receive / fallback 条目跳过不解析。
+    签名只由 name 与 inputs 的规范类型构成，参数名不参与；inputs 支持
+    基础类型、数组与 `components` 嵌套 tuple。规范签名重复抛
+    `AbiMetadataError`。
+  - `canonical_error_signature(error)`：返回 `Name(type1,type2,...)`
+    规范签名；`error_selector(error)` 返回 `keccak256(签名)[:4]` 四字节
+    selector（bytes）。
+  - `encode_error_data(abi, error_name, args=None)`：`error_name` 接受
+    错误名（无同名重载时）或规范错误签名；`args` 为按 inputs 声明顺序
+    的实参 list/tuple。返回不可变 `EncodedErrorData`（`error` /
+    `selector` / `data`，以及 `error_name` / `signature` /
+    `selector_hex` / `data_hex` 属性），`data` 为
+    `selector + 参数 tuple 的 ABI 编码` 的完整 revert data。
+  - `decode_error_data(abi, data)`：`data` 接受 `bytes` 或可选 `0x`
+    前缀的偶数位十六进制字符串；按前四字节 selector 定位 error，严格
+    解码参数 tuple，返回不可变 `DecodedErrorData`（`error` / `selector`
+    / `args`，以及 `error_name` / `signature` / `selector_hex` /
+    `types` / `values` 属性）。`args` 每项为带类型标注的
+    `ErrorArgument(name, abi_type, value)`，`type` 属性给出规范类型
+    字符串；无参数 error 的 revert data 即四字节 selector，解码为空
+    tuple。
+  - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；函数、
+    事件路径行为不变。
 
 ## 路径
 
@@ -189,6 +216,22 @@
   未知 selector、错误函数名、歧义重载与尾随字节各自只得到上述唯一结果。
   ABI 同时包含函数与事件时，函数入口只消费 function 条目，事件 topic 与
   日志解码行为不变。
+
+- error 路径的五类失败（均为独立的 `ValueError` 子类；元数据错误与
+  函数路径共用 `AbiMetadataError`，值不匹配仍抛既有 `ABIValueError`）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `AbiMetadataError` | ABI 根非法、error 条目缺 name/type/inputs、标识符非法、参数类型字符串无法解析，或规范签名重复 |
+  | `AbiErrorNotFoundError` | 按错误名或规范签名找不到 error |
+  | `AbiErrorOverloadError` | 只给错误名但同名重载不止一个，无法唯一选择 |
+  | `AbiErrorSelectorError` | revert data 的四字节 selector 在 ABI 中匹配不到 error |
+  | `AbiErrorDataLengthError` | revert data 少于四字节 |
+  | `AbiErrorTrailingDataError` | 参数按声明类型消费完后仍有尾随字节 |
+
+  revert data 不是 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串时抛
+  `ABIValueError`。ABI 同时包含函数、事件与 error 时，各入口只消费
+  各自条目，既有函数与事件行为不变。
 
 ## 约定
 

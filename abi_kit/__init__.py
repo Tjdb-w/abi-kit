@@ -15,7 +15,10 @@
   （parse_function_abi / function_selector / canonical_function_signature /
   encode_function_call / decode_function_call）；
 - 函数返回值（outputs）编解码
-  （encode_function_result / decode_function_result）。
+  （encode_function_result / decode_function_result）；
+- Solidity error ABI 解析、selector 与 revert data 编解码
+  （parse_error_abi / canonical_error_signature / error_selector /
+  encode_error_data / decode_error_data）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
@@ -23,7 +26,10 @@ AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事
 分派失败抛出带错误码的 AbiLogDispatchError；函数调用路径的元数据、
 查找、selector、calldata 长度与尾随数据错误分别抛出 AbiMetadataError、
 AbiFunctionNotFoundError、AbiOverloadError、AbiSelectorError、
-AbiCalldataLengthError、AbiTrailingDataError。
+AbiCalldataLengthError、AbiTrailingDataError；error 路径的查找、重载、
+selector、数据长度与尾随数据错误分别抛出 AbiErrorNotFoundError、
+AbiErrorOverloadError、AbiErrorSelectorError、AbiErrorDataLengthError、
+AbiErrorTrailingDataError（元数据错误与函数路径共用 AbiMetadataError）。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
@@ -32,6 +38,17 @@ from ._contract import (
     decode_contract_event_log,
     decode_contract_event_logs,
     parse_event_registry,
+)
+from ._error import (
+    DecodedErrorData,
+    EncodedErrorData,
+    ErrorArgument,
+    ErrorDefinition,
+    canonical_error_signature,
+    decode_error_data,
+    encode_error_data,
+    error_selector,
+    parse_error_abi,
 )
 from ._event import (
     EncodedEventLog,
@@ -43,6 +60,11 @@ from ._event import (
 )
 from ._exceptions import (
     AbiCalldataLengthError,
+    AbiErrorDataLengthError,
+    AbiErrorNotFoundError,
+    AbiErrorOverloadError,
+    AbiErrorSelectorError,
+    AbiErrorTrailingDataError,
     AbiEventError,
     AbiFunctionNotFoundError,
     AbiLogDispatchError,
@@ -93,6 +115,11 @@ __all__ = [
     "AbiSelectorError",
     "AbiCalldataLengthError",
     "AbiTrailingDataError",
+    "AbiErrorNotFoundError",
+    "AbiErrorOverloadError",
+    "AbiErrorSelectorError",
+    "AbiErrorDataLengthError",
+    "AbiErrorTrailingDataError",
     "ABIType",
     "ElementaryType",
     "ArrayType",
@@ -131,4 +158,13 @@ __all__ = [
     "decode_function_result",
     "encodeFunctionResult",
     "decodeFunctionResult",
+    "ErrorDefinition",
+    "ErrorArgument",
+    "EncodedErrorData",
+    "DecodedErrorData",
+    "parse_error_abi",
+    "canonical_error_signature",
+    "error_selector",
+    "encode_error_data",
+    "decode_error_data",
 ]
