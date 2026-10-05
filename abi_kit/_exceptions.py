@@ -24,6 +24,8 @@
 - AbiDeploymentDataError：部署数据（creation bytecode / deployment data）
   类型或十六进制非法、deployment data 短于 creation bytecode，或开头
   与 creation bytecode 逐字节不一致。
+- AbiContractCallError：合约调用分派路径（function / receive /
+  fallback）的注册表构建、目标选择与数据非法失败，以 ``code`` 唯一区分。
 
 所有异常各自独立，均为 ValueError 子类。
 """
@@ -194,6 +196,49 @@ class AbiErrorTrailingDataError(ValueError):
 class AbiDeploymentDataError(ValueError):
     """creation bytecode / deployment data 类型或十六进制非法，或部署
     数据的创建字节码前缀长度不足、逐字节核对不一致。"""
+
+
+class AbiContractCallError(ValueError):
+    """合约调用分派（function / receive / fallback）失败。
+
+    ``code`` 取下列唯一错误码之一：
+
+    - ``CONTRACT_CALL_ABI_INVALID``：ABI 根非法（不是 JSON 字符串/条目
+      数组、根不是数组），function / receive / fallback 条目非法
+      （receive/fallback 带 inputs、function 元数据非法等），或重复登记
+      （规范签名重复、receive/fallback 各至多一个）；
+    - ``CONTRACT_CALL_TARGET_NOT_FOUND``：按函数名/规范签名或 receive /
+      fallback 字面目标找不到目标，或解码时空 calldata 无 receive、未知
+      selector 无 fallback，调用没有可分派的目标；
+    - ``CONTRACT_CALL_AMBIGUOUS``：只给函数名但同名函数不止一个，无法
+      唯一选择；
+    - ``CONTRACT_CALL_DATA_INVALID``：calldata / data 不是 bytes 或可选
+      ``0x`` 前缀的偶数位十六进制字符串（fallback 原样 data 同口径）；
+    - ``CONTRACT_CALL_RECEIVE_NONEMPTY``：receive 只接受空实参且 data 必须
+      为空，编码时给出非空实参或非空 data，或解码成 receive 却带非空数据；
+    - ``CONTRACT_CALL_FALLBACK_ARGS``：fallback 只接受空实参，给出了非空
+      实参。
+
+    值层失败（实参不能按声明类型编码、参数区不能严格解码）仍抛
+    :class:`ABIValueError`；参数解码后存在尾随字节继续抛
+    :class:`AbiTrailingDataError`。
+    """
+
+    #: 全部公开错误码。
+    CODES = (
+        "CONTRACT_CALL_ABI_INVALID",
+        "CONTRACT_CALL_TARGET_NOT_FOUND",
+        "CONTRACT_CALL_AMBIGUOUS",
+        "CONTRACT_CALL_DATA_INVALID",
+        "CONTRACT_CALL_RECEIVE_NONEMPTY",
+        "CONTRACT_CALL_FALLBACK_ARGS",
+    )
+
+    def __init__(self, code: str, message: str):
+        if code not in self.CODES:
+            raise ValueError(f"未知的合约调用分派错误码：{code!r}")
+        self.code = code
+        super().__init__(f"{code}: {message}")
 
 
 #: 函数调用路径对值层异常的公开名称；与既有 ABIValueError 是同一个类，

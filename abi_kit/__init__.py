@@ -21,7 +21,10 @@
   encode_error_data / decode_error_data）；
 - 合约部署 constructor ABI 解析与 deployment data 编解码
   （parse_constructor_abi / encode_constructor_data /
-  decode_constructor_data）。
+  decode_constructor_data）；
+- 合约调用分派，统一处理 function / receive / fallback
+  （parse_contract_call_registry / encode_contract_call /
+  decode_contract_call）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
@@ -35,7 +38,10 @@ AbiErrorOverloadError、AbiErrorSelectorError、AbiErrorDataLengthError、
 AbiErrorTrailingDataError（元数据错误与函数路径共用 AbiMetadataError）；
 部署路径的 creation bytecode / deployment data 类型、十六进制、长度与
 前缀不一致错误抛 AbiDeploymentDataError，参数尾随数据与函数路径共用
-AbiTrailingDataError（元数据错误同样共用 AbiMetadataError）。
+AbiTrailingDataError（元数据错误同样共用 AbiMetadataError）；合约调用
+分派（function / receive / fallback）的注册表构建、目标选择与数据非法
+失败抛带错误码的 AbiContractCallError，值层失败仍抛 ABIValueError、
+尾随数据仍抛 AbiTrailingDataError。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
@@ -54,6 +60,13 @@ from ._contract import (
     decode_contract_event_log,
     decode_contract_event_logs,
     parse_event_registry,
+)
+from ._contract_call import (
+    ContractCallRegistry,
+    DecodedContractCall,
+    decode_contract_call,
+    encode_contract_call,
+    parse_contract_call_registry,
 )
 from ._error import (
     DecodedErrorData,
@@ -76,6 +89,7 @@ from ._event import (
 )
 from ._exceptions import (
     AbiCalldataLengthError,
+    AbiContractCallError,
     AbiErrorDataLengthError,
     AbiErrorNotFoundError,
     AbiErrorOverloadError,
@@ -138,6 +152,7 @@ __all__ = [
     "AbiErrorDataLengthError",
     "AbiErrorTrailingDataError",
     "AbiDeploymentDataError",
+    "AbiContractCallError",
     "ABIType",
     "ElementaryType",
     "ArrayType",
@@ -193,4 +208,9 @@ __all__ = [
     "parse_constructor_abi",
     "encode_constructor_data",
     "decode_constructor_data",
+    "ContractCallRegistry",
+    "DecodedContractCall",
+    "parse_contract_call_registry",
+    "encode_contract_call",
+    "decode_contract_call",
 ]
