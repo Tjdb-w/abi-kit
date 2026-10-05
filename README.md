@@ -166,6 +166,37 @@ data 编解码、合约部署 constructor 参数编解码。
     数量、类型或 ABI 编码布局不合法抛 `ABIValueError`；尾随字节抛
     `AbiTrailingDataError`。静态、动态与嵌套参数稳定往返；函数、事件、
     error 路径行为不变。
+- 已实现：合约调用分派，统一处理 function、receive 与 fallback。
+  - `parse_contract_call_registry(abi)`：解析 ABI JSON 字符串或等价
+    条目数组，只登记 `type` 为 `function` / `receive` / `fallback`
+    的条目，构建不可变 `ContractCallRegistry`（`functions` 按声明
+    顺序保存，`receive` / `fallback` 为是否登记的布尔标记）；其余
+    条目（event / constructor / error、缺 type、未知类型或非对象
+    条目）跳过不解析。function 保留名称、inputs、outputs 与
+    selector 语义（同 `parse_function_abi`），规范签名不得重复；
+    receive 与 fallback 至多各一个且不接受 inputs。
+  - `encode_contract_call(abi, target, args=None, data=None)`：
+    `abi` 接受 ABI JSON 字符串、等价条目数组或已构建的注册表；
+    `target` 接受无重载函数名、规范函数签名、`"receive"` 或
+    `"fallback"`。函数按 inputs 顺序编码实参，返回
+    `EncodedContractCall`（`bytes` 子类，值本身即完整 calldata
+    `selector + 参数区`，另有 `kind` / `function` / `args` /
+    `data` / `calldata` / `calldata_hex` / `selector` 属性）；
+    receive 仅接受空实参与空 data，calldata 为 `b""`；fallback
+    仅接受空实参，把 data 原样放入 calldata。
+  - `decode_contract_call(abi, calldata)`：按完整 calldata 分派并
+    严格解码，返回不可变 `DecodedContractCall`（`kind` /
+    `function` / `args` / `data` / `calldata`，以及 `values` /
+    `calldata_hex` / `selector` 属性）。`function` 为
+    `FunctionDefinition` 或 `None`；`args` 为 `FunctionArgument`
+    tuple；函数 `data` 为参数区，fallback `data` 为完整
+    calldata，receive `data` 为 `b""`。空 calldata 优先选
+    receive，否则选 fallback；未知 selector（含不足四字节）有
+    fallback 时归入 fallback，否则报告目标不存在。
+  - 值口径与 `encode_abi_value` / `decode_abi_value` 完全一致；值
+    错误仍抛 `ABIValueError`，参数解码有尾随字节继续抛
+    `AbiTrailingDataError`，调用层失败只抛异常、不返回部分结果。
+    既有函数、error、constructor 与事件日志入口行为不变。
 
 ## 路径
 
@@ -274,6 +305,24 @@ data 编解码、合约部署 constructor 参数编解码。
   实参数量或类型与 inputs 声明不符、参数区 ABI 编码布局不合法时抛
   `ABIValueError`。ABI 同时包含函数、事件、error 与 constructor 时，
   各入口只消费各自条目，既有行为不变。
+
+- 合约调用分派（function / receive / fallback）路径的失败统一抛
+  `AbiContractCallError`（`ValueError` 子类），通过 `code` 携带唯一
+  错误码：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `CALL_ENTRY_INVALID` | ABI 根非法、function / receive / fallback 条目非法（含 receive / fallback 带 inputs），或函数规范签名重复、receive / fallback 重复登记 |
+  | `CALL_TARGET_NOT_FOUND` | 函数名 / 规范签名 / receive / fallback 目标不存在，或 calldata 无法分派（空 calldata 无 receive / fallback、未知 selector 无 fallback） |
+  | `CALL_TARGET_AMBIGUOUS` | 只给函数名但同名重载不止一个，无法唯一选择 |
+  | `CALL_DATA_INVALID` | calldata 或 data 不是 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串，或 function 调用携带额外 data |
+  | `CALL_RECEIVE_NONEMPTY` | receive 调用携带非空实参或非空 data |
+  | `CALL_FALLBACK_ARGS` | fallback 调用携带实参 |
+
+  实参值与声明类型不匹配（含数量不符）、参数区 ABI 编码布局不合法
+  仍抛 `ABIValueError`；函数参数区解码后的尾随字节仍抛
+  `AbiTrailingDataError`。调用层失败只抛异常，不返回部分结果；既有
+  函数、error、constructor 与事件日志入口的输入输出和异常不变。
 
 ## 约定
 

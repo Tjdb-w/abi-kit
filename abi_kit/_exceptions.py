@@ -24,6 +24,8 @@
 - AbiDeploymentDataError：部署数据（creation bytecode / deployment data）
   类型或十六进制非法、deployment data 短于 creation bytecode，或开头
   与 creation bytecode 逐字节不一致。
+- AbiContractCallError：合约调用注册表构建或 function / receive /
+  fallback 调用分派失败（调用分派层），以 ``code`` 区分六类失败。
 
 所有异常各自独立，均为 ValueError 子类。
 """
@@ -189,6 +191,45 @@ class AbiErrorDataLengthError(ValueError):
 
 class AbiErrorTrailingDataError(ValueError):
     """error 参数解码完成后仍有尾随字节未被消费。"""
+
+
+class AbiContractCallError(ValueError):
+    """合约调用分派（function / receive / fallback）失败。
+
+    ``code`` 取下列唯一错误码之一：
+
+    - ``CALL_ENTRY_INVALID``：ABI 根非法、function / receive / fallback
+      条目非法，或函数规范签名重复、receive / fallback 重复登记；
+    - ``CALL_TARGET_NOT_FOUND``：调用目标不存在——函数名 / 规范签名无
+      匹配、未登记的 receive / fallback，或 calldata 无法分派（空
+      calldata 无 receive / fallback、未知 selector 无 fallback）；
+    - ``CALL_TARGET_AMBIGUOUS``：只给函数名但同名重载不止一个，无法
+      唯一选择；
+    - ``CALL_DATA_INVALID``：calldata 或 data 不是 ``bytes`` 或可选
+      ``0x`` 前缀的偶数位十六进制字符串，或 function 调用携带额外
+      data；
+    - ``CALL_RECEIVE_NONEMPTY``：receive 调用携带非空实参或非空 data；
+    - ``CALL_FALLBACK_ARGS``：fallback 调用携带实参。
+
+    实参值与声明类型不匹配仍抛 :class:`ABIValueError`；参数解码后的
+    尾随字节仍抛 :class:`AbiTrailingDataError`。
+    """
+
+    #: 全部公开错误码。
+    CODES = (
+        "CALL_ENTRY_INVALID",
+        "CALL_TARGET_NOT_FOUND",
+        "CALL_TARGET_AMBIGUOUS",
+        "CALL_DATA_INVALID",
+        "CALL_RECEIVE_NONEMPTY",
+        "CALL_FALLBACK_ARGS",
+    )
+
+    def __init__(self, code: str, message: str):
+        if code not in self.CODES:
+            raise ValueError(f"未知的合约调用错误码：{code!r}")
+        self.code = code
+        super().__init__(f"{code}: {message}")
 
 
 class AbiDeploymentDataError(ValueError):
