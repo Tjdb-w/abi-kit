@@ -26,6 +26,9 @@ data 编解码、合约部署 constructor 参数编解码。
   - `get_abi_value_at_path(abi_type, data, path)`：按路径只返回选中的子值。
   - `replace_abi_value_at_path(abi_type, data, path, value)`：返回替换后的
     完整新编码；原始字节不被就地修改，动态偏移与长度随结果重算。
+  - `replace_abi_values_at_paths(abi_type, data, replacements)`：按顺序
+    给出多对 `(路径, 新值)`，基于同一份原始编码原子替换多个互不重叠的
+    子值并一次性重编码；路径重复或互为祖先与后代时拒绝整次操作。
   - 覆盖 tuple、动态/定长数组、嵌套数组以及 tuple 内继续嵌套数组。
 - 已实现：事件 ABI、签名 topic0 与日志还原校验。
   - `parse_event_abi(event_json)`：解析 ABI JSON 的 event 对象，返回不可变

@@ -1,13 +1,17 @@
 """嵌套值的路径化读取与定点替换。
 
-在完整值编解码（:mod:`abi_kit._codec`）之上提供两个面向调用方的入口：
+在完整值编解码（:mod:`abi_kit._codec`）之上提供三个面向调用方的入口：
 
 - :func:`get_abi_value_at_path`：按 ABI 类型、完整编码字节与路径，只返回
   路径选中的子值；
 - :func:`replace_abi_value_at_path`：在相同类型与原始编码下，用替换值
   定点替换路径所指子值，返回整体重新编码后的全新字节。原字节不会被就地
   修改；动态偏移与长度随结果重新计算，替换前后动态数据长度不同也不会
-  影响未选中的兄弟节点。
+  影响未选中的兄弟节点；
+- :func:`replace_abi_values_at_paths`：一次调用按顺序给出多对路径与新值，
+  基于同一份原始编码原子地替换多个互不重叠的子值，返回整体重新编码后的
+  全新字节；空的替换序列返回与输入内容相同的新 bytes，路径重复或互为
+  祖先与后代时拒绝整次操作。
 
 路径语法：
 
@@ -26,10 +30,16 @@ tuple 字段名通过两种方式提供：直接构造带 ``names`` 的
 该带名语法仅用于本模块，:func:`abi_kit.parse_abi_type` 的严格规范语法保持
 不变。
 
-五类失败统一抛出带唯一错误码的 :class:`abi_kit.AbiPathError`：
+五类单路径失败统一抛出带唯一错误码的 :class:`abi_kit.AbiPathError`：
 
 - ``PATH_SYNTAX`` / ``PATH_OUT_OF_RANGE`` / ``PATH_NOT_FOUND`` /
   ``PATH_TYPE_MISMATCH`` / ``PATH_VALUE_MISMATCH``。
+
+批量替换另有两类失败：
+
+- ``PATH_REPLACEMENTS_INVALID``：替换序列不是 list/tuple，或元素不是
+  恰好含路径与新值的二元 list/tuple；
+- ``PATH_CONFLICT``：两条路径指向同一节点或互为祖先与后代。
 
 原始编码本身非法时仍按值层约定抛出 :class:`abi_kit.ABIValueError`，不属于
 上述五类路径失败。
@@ -52,6 +62,8 @@ PATH_OUT_OF_RANGE = "PATH_OUT_OF_RANGE"
 PATH_NOT_FOUND = "PATH_NOT_FOUND"
 PATH_TYPE_MISMATCH = "PATH_TYPE_MISMATCH"
 PATH_VALUE_MISMATCH = "PATH_VALUE_MISMATCH"
+PATH_REPLACEMENTS_INVALID = "PATH_REPLACEMENTS_INVALID"
+PATH_CONFLICT = "PATH_CONFLICT"
 
 
 # ---- 带字段名的类型字符串 -------------------------------------------------
@@ -491,3 +503,89 @@ def replace_abi_value_at_path(
 
     new_root = _set_at(root_value, positions, value) if positions else value
     return _encode(resolved_type, new_root)
+
+
+def replace_abi_values_at_paths(
+    abi_type: ABIType | str, data: bytes | str, replacements
+) -> bytes:
+    """一次调用原子地替换多条路径所指的子值，返回整体重新编码的新 bytes。
+
+    ``replacements`` 必须是 list 或 tuple，每个元素是恰好含
+    ``(路径, 新值)`` 的二元 list/tuple；路径语法与
+    :func:`replace_abi_value_at_path` 完全一致。所有替换基于同一份原始
+    编码解码出的值树，互不重叠地写入后一次性重新编码：动态偏移、数组
+    长度与内层结构布局统一重算，未被选中的兄弟值保持不变，原始 ``data``
+    不会被就地修改。空的替换序列返回与输入内容相同的新 bytes。
+
+    替换序列结构不合法抛出 ``PATH_REPLACEMENTS_INVALID``；同一条路径
+    出现两次，或两条路径互为祖先与后代（含空路径根值与任何其他路径），
+    抛出 ``PATH_CONFLICT`` 并拒绝整次操作。路径语法、越界、字段缺失、
+    步进类型与替换值类型失败分别沿用 ``PATH_SYNTAX`` /
+    ``PATH_OUT_OF_RANGE`` / ``PATH_NOT_FOUND`` / ``PATH_TYPE_MISMATCH`` /
+    ``PATH_VALUE_MISMATCH``；原始编码非法仍抛 :class:`abi_kit.ABIValueError`。
+    """
+    if not isinstance(replacements, (list, tuple)):
+        raise AbiPathError(
+            PATH_REPLACEMENTS_INVALID,
+            f"替换序列必须是 list 或 tuple，得到 {type(replacements).__name__}",
+        )
+    pairs: list[tuple[object, object]] = []
+    for index, item in enumerate(replacements):
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise AbiPathError(
+                PATH_REPLACEMENTS_INVALID,
+                f"替换序列第 {index} 项必须是恰好含 (路径, 新值) 的二元 "
+                f"list/tuple，得到 {item!r}",
+            )
+        pairs.append((item[0], item[1]))
+
+    resolved_type = _coerce_type(abi_type)
+    raw = _coerce_data(data)
+    root_value = decode_abi_value(resolved_type, raw)
+
+    # 先按顺序解析并导航全部路径，把字段名解析成整数位置路径；同节点的
+    # 不同写法（字段名与位置下标）由此归一为同一位置序列。
+    resolved: list[tuple[str, list[int], ABIType, object]] = []
+    for path, value in pairs:
+        steps = _parse_path(path)
+        target_type, _target_value, positions = _navigate(
+            resolved_type, root_value, steps
+        )
+        resolved.append((path, positions, target_type, value))
+
+    # 重叠写入检测：位置路径相等（同一节点）或互为前缀（祖先与后代）即
+    # 冲突，整次操作拒绝，不应用任何一项。
+    for later in range(len(resolved)):
+        later_path, later_positions = resolved[later][0], resolved[later][1]
+        for earlier in range(later):
+            earlier_path, earlier_positions = (
+                resolved[earlier][0],
+                resolved[earlier][1],
+            )
+            if _paths_overlap(earlier_positions, later_positions):
+                raise AbiPathError(
+                    PATH_CONFLICT,
+                    f"路径 {earlier_path!r} 与 {later_path!r} 存在重叠写入",
+                )
+
+    # 冲突排除后再逐项校验替换值，把值不匹配归类为 PATH_VALUE_MISMATCH；
+    # 兄弟节点均来自既有合法编码，整树重编码不会再引入值层错误。
+    for _path, _positions, target_type, value in resolved:
+        try:
+            _encode(target_type, value)
+        except ABIValueError as exc:
+            raise AbiPathError(
+                PATH_VALUE_MISMATCH,
+                f"替换值与路径所指类型不一致：{exc}",
+            ) from exc
+
+    new_root = root_value
+    for _path, positions, _target_type, value in resolved:
+        new_root = _set_at(new_root, positions, value) if positions else value
+    return _encode(resolved_type, new_root)
+
+
+def _paths_overlap(first: list[int], second: list[int]) -> bool:
+    """两条位置路径是否指向同一节点或互为祖先与后代。"""
+    shared = min(len(first), len(second))
+    return first[:shared] == second[:shared]

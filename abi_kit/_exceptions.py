@@ -50,7 +50,11 @@ class AbiPathError(ValueError):
     - ``PATH_NOT_FOUND``：tuple 中不存在该名称的字段；
     - ``PATH_TYPE_MISMATCH``：对非容器值继续步进，或对 tuple 使用索引、
       对数组使用字段名；
-    - ``PATH_VALUE_MISMATCH``：替换值与路径所指的 ABI 类型不一致。
+    - ``PATH_VALUE_MISMATCH``：替换值与路径所指的 ABI 类型不一致；
+    - ``PATH_REPLACEMENTS_INVALID``：批量替换的替换序列本身不合法（不是
+      list/tuple，或元素不是恰好含路径与新值的二元 list/tuple）；
+    - ``PATH_CONFLICT``：批量替换中两条路径指向同一节点或互为祖先与
+      后代，存在重叠写入。
     """
 
     #: 全部公开错误码。
@@ -60,6 +64,8 @@ class AbiPathError(ValueError):
         "PATH_NOT_FOUND",
         "PATH_TYPE_MISMATCH",
         "PATH_VALUE_MISMATCH",
+        "PATH_REPLACEMENTS_INVALID",
+        "PATH_CONFLICT",
     )
 
     def __init__(self, code: str, message: str):
