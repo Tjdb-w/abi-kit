@@ -53,6 +53,16 @@ data 编解码、合约部署 constructor 参数编解码。
     结果补齐到 32 字节倍数，`string` 与动态 `bytes` 内容不补零。动态
     indexed 参数经 `decode_event_log` 仍得 32 字节 topic bytes，不伪装成
     可逆值。
+  - `match_event_log_values(event, topics, data, values)`：先按
+    `decode_event_log` 校验 topics 数量、topic0 与 data（异常与错误码
+    原样沿用），再核验候选值——非 indexed 值须等于 data 解码值；indexed
+    的 `address`/`bool`/`intM`/`uintM`/`bytesM` 须等于 topic 解码值；
+    indexed 的 `string`、动态 `bytes`、数组与 tuple 按
+    `encode_event_log` 的索引特殊编码重算 32 字节主题比对（哈希主题
+    不可逆，只能正向重算）。匹配返回声明顺序 tuple，否则 None。event
+    非 `EventDefinition` 抛 `EVENT_ABI_INVALID`；values 非 list/tuple、
+    数量不符或动态 indexed 候选无法生成声明类型索引值抛
+    `EVENT_VALUE_INVALID`；值或哈希不同只返回 None。
   - `topics` 每项接受 32 字节 `bytes` 或可选 `0x` 前缀的 64 位十六进制
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
@@ -72,6 +82,13 @@ data 编解码、合约部署 constructor 参数编解码。
     与按声明顺序排列的 values tuple（口径同 `decode_event_log`）。
   - `decode_contract_event_logs(registry, logs)`：按输入顺序批量还原，
     返回等长 tuple；任一日志失败即整体抛出，不返回部分结果。
+  - `match_contract_event_log_values(registry, log, values)`：复用同一套
+    事件选择、匿名指定与 topic0 分派语义定位事件后，委托
+    `match_event_log_values` 核验候选值，匹配返回声明顺序 tuple，否则
+    None。
+  - `match_contract_event_logs_values(registry, logs, values_seq)`：按
+    输入顺序批量核验，`values_seq` 与 `logs` 等长，返回等长 tuple（每项
+    为声明顺序 tuple 或 None）；任一日志失败即整体抛出。
   - 分派失败抛 `AbiLogDispatchError`（见异常表）；分派成功后的日志还原
     委托 `decode_event_log`，`AbiEventError` 与错误码原样传播。
 - 已实现：函数 ABI、selector 与函数调用 calldata 编解码。

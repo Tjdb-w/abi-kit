@@ -11,6 +11,11 @@
   tuple。
 - :func:`decode_contract_event_logs`：按输入顺序批量还原日志序列，返回
   等长 tuple；任一日志失败即整体抛出，不返回部分结果。
+- :func:`match_contract_event_log_values` /
+  :func:`match_contract_event_logs_values`：复用同一套选择与分派语义
+  定位事件后，委托 :func:`abi_kit.match_event_log_values` 核验候选值，
+  匹配返回声明顺序 tuple，否则 None；批量入口按输入顺序返回等长 tuple，
+  任一日志失败即整体抛出。
 
 日志口径：
 
@@ -49,6 +54,7 @@ from ._event import (
     _topic_bytes,
     decode_event_log,
     event_topic0,
+    match_event_log_values,
     parse_event_abi,
 )
 from ._exceptions import AbiEventError, AbiLogDispatchError
@@ -301,3 +307,57 @@ def decode_contract_event_logs(registry, logs) -> tuple:
             f"日志序列必须是 list 或 tuple，得到 {type(logs).__name__}"
         )
     return tuple(decode_contract_event_log(registry, log) for log in logs)
+
+
+# ---- 候选值核验 ------------------------------------------------------------
+
+
+def match_contract_event_log_values(registry, log, values):
+    """分派单条合约事件日志并核验候选值。
+
+    ``registry`` 为 :func:`parse_event_registry` 构建的
+    :class:`EventRegistry`；``log`` 为映射，``topics`` 与 ``data`` 必填，
+    可选 ``event`` 指定规范签名或唯一事件名；``values`` 为按命中事件参数
+    声明顺序排列的候选值（list/tuple）。
+
+    事件选择、匿名指定与 topic0 分派语义及错误与
+    :func:`decode_contract_event_log` 完全一致；定位后委托
+    :func:`abi_kit.match_event_log_values` 核验，匹配返回声明顺序 tuple，
+    否则 None。
+
+    分派失败抛 :class:`abi_kit.AbiLogDispatchError`；日志还原与候选值
+    核验失败抛 :class:`abi_kit.AbiEventError`（错误码不变）。
+    """
+    _require_registry(registry)
+    event, topics, data = _dispatch(registry, log)
+    return match_event_log_values(event, topics, data, values)
+
+
+def match_contract_event_logs_values(registry, logs, values_seq) -> tuple:
+    """按输入顺序批量分派并核验候选值。
+
+    ``logs`` 为日志映射组成的 list/tuple；``values_seq`` 为与 ``logs``
+    等长的候选值序列，每项口径同 :func:`match_contract_event_log_values`
+    的 ``values``。返回与输入等长、顺序一致的 tuple，每项为声明顺序
+    tuple 或 None。任一日志失败即整体抛出，不返回部分结果。
+    """
+    _require_registry(registry)
+    if isinstance(logs, (str, bytes)) or not isinstance(logs, (list, tuple)):
+        raise _entry_invalid(
+            f"日志序列必须是 list 或 tuple，得到 {type(logs).__name__}"
+        )
+    if isinstance(values_seq, (str, bytes)) or not isinstance(
+        values_seq, (list, tuple)
+    ):
+        raise _entry_invalid(
+            f"候选值序列必须是 list 或 tuple，得到 {type(values_seq).__name__}"
+        )
+    if len(logs) != len(values_seq):
+        raise _entry_invalid(
+            f"候选值序列数量应与日志数量一致：{len(logs)} 条日志，"
+            f"得到 {len(values_seq)} 组候选值"
+        )
+    return tuple(
+        match_contract_event_log_values(registry, log, values)
+        for log, values in zip(logs, values_seq)
+    )

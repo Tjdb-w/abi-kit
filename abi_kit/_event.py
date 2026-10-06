@@ -11,6 +11,10 @@
 - :func:`encode_event_log`：按声明值生成日志 topics 与 data，返回不可变
   :class:`EncodedEventLog`，与 :func:`decode_event_log` 的 topics 数量、
   补零方向与 data tuple 口径一致。
+- :func:`match_event_log_values`：先按 :func:`decode_event_log` 校验日志，
+  再核验候选值——非 indexed 值须等于 data 解码值，静态 indexed 值须等于
+  topic 解码值，动态 indexed 值按 :func:`encode_event_log` 的索引特殊编码
+  重算 32 字节主题比对；匹配返回声明顺序 tuple，否则 None。
 
 日志口径：
 
@@ -556,3 +560,75 @@ def encode_event_log(event: EventDefinition, values) -> EncodedEventLog:
         raise _value_invalid(f"事件值编码失败：{exc}") from None
 
     return EncodedEventLog(event, tuple(topics), data)
+
+
+# ---- 候选值核验 ------------------------------------------------------------
+
+
+def _is_dynamic_indexed(abi_type: ABIType) -> bool:
+    """indexed 参数是否走 Keccak-256 主题（string/动态 bytes/数组/tuple）。"""
+    if isinstance(abi_type, (ArrayType, TupleType)):
+        return True
+    if isinstance(abi_type, ElementaryType):
+        kind = abi_type.kind
+        return kind == "string" or (kind == "bytes" and abi_type.byte_size is None)
+    return False
+
+
+def match_event_log_values(event: EventDefinition, topics, data, values):
+    """校验日志并核验候选值，匹配返回声明顺序 tuple，否则 None。
+
+    先按 :func:`decode_event_log` 校验 topics 数量、topic0 与 data（异常
+    与错误码原样沿用），再按声明顺序逐个比较候选值：
+
+    - 非 indexed 参数：候选值须等于 data 解码值；
+    - indexed 的 address/bool/intM/uintM/bytesM：候选值须等于 topic 严格
+      解码值；
+    - indexed 的 string、动态 bytes、数组与 tuple：候选值按
+      :func:`encode_event_log` 的事件索引特殊编码重算 32 字节 Keccak-256
+      主题，与日志主题逐字节比对（哈希主题不可逆，只能正向重算）。
+
+    全部匹配时返回 ``tuple(values)``；任一值或哈希不同返回 None。
+
+    event 不是 :class:`EventDefinition` 时抛带 ``EVENT_ABI_INVALID`` 的
+    :class:`abi_kit.AbiEventError`（由 decode_event_log 的校验抛出）；
+    values 不是 list/tuple、数量与声明不符，或动态 indexed 候选值无法按
+    声明类型生成索引值时，抛带 ``EVENT_VALUE_INVALID`` 的
+    :class:`abi_kit.AbiEventError`。相同输入始终得到相同结果。
+    """
+    # 先完成日志结构校验与严格解码；event 非法、topics 数量/值、topic0
+    # 与 data 的失败全部沿用 decode_event_log 的异常与错误码。
+    decoded = decode_event_log(event, topics, data)
+
+    if not isinstance(values, (list, tuple)):
+        raise _value_invalid(
+            f"values 必须是 list 或 tuple，得到 {type(values).__name__}"
+        )
+    if len(values) != len(event.inputs):
+        raise _value_invalid(
+            f"values 数量应为 {len(event.inputs)}，得到 {len(values)}"
+        )
+
+    # topics 已经过 decode_event_log 校验，这里规范化不会失败。
+    normalized_topics = [_topic_bytes(item) for item in topics]
+    indexed_iter = iter(
+        normalized_topics if event.anonymous else normalized_topics[1:]
+    )
+    for param, candidate, decoded_value in zip(event.inputs, values, decoded):
+        if not param.indexed:
+            if candidate != decoded_value:
+                return None
+            continue
+        topic = next(indexed_iter)
+        if _is_dynamic_indexed(param.abi_type):
+            try:
+                recomputed = _encode_indexed_topic(param.abi_type, candidate)
+            except (ABIValueError, ABITypeError) as exc:
+                raise _value_invalid(
+                    f"indexed 候选值无法按声明类型生成索引值：{exc}"
+                ) from None
+            if recomputed != topic:
+                return None
+        elif candidate != decoded_value:
+            return None
+    return tuple(values)
