@@ -85,7 +85,9 @@ class AbiEventError(ValueError):
       非 indexed 参数 tuple 无法严格解码（长度、偏移、填充、残留等）。
     - ``EVENT_VALUE_INVALID``：事件日志编码入参不合法——event 不是
       EventDefinition、values 不是 list/tuple、数量与声明不符，或任一值
-      与其声明类型不匹配。
+      与其声明类型不匹配；亦用于事件候选值核验（match_event_log_values）
+      的 values 不是 list/tuple、数量与声明不符，或动态 indexed 候选
+      （string、动态 bytes、数组、tuple）无法按声明类型生成索引值。
     """
 
     #: 全部公开错误码。

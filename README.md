@@ -53,6 +53,15 @@ data 编解码、合约部署 constructor 参数编解码。
     结果补齐到 32 字节倍数，`string` 与动态 `bytes` 内容不补零。动态
     indexed 参数经 `decode_event_log` 仍得 32 字节 topic bytes，不伪装成
     可逆值。
+  - `match_event_log_values(event, topics, data, values)`：在
+    `decode_event_log` 校验通过的前提下核验候选值。`values` 按声明顺序
+    接受 list 或 tuple，数量必须与参数数相等；非 indexed 候选与 data
+    解码值比较，indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`
+    候选与 topic 解码值比较，indexed 的 `string`、动态 `bytes`、数组与
+    tuple 候选按上述事件索引特殊编码重算 32 字节 Keccak-256 主题再与
+    日志 topic 比较。全部一致返回按声明顺序排列的值 tuple，任一值或
+    哈希不同只返回 None（不抛错）。动态哈希主题不可逆，只比较哈希，
+    不还原原值。
   - `topics` 每项接受 32 字节 `bytes` 或可选 `0x` 前缀的 64 位十六进制
     字符串；`data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制字符串。
   - Keccak-256 为仓库内纯 Python 实现（Ethereum 口径，域后缀 `0x01`，
@@ -72,6 +81,14 @@ data 编解码、合约部署 constructor 参数编解码。
     与按声明顺序排列的 values tuple（口径同 `decode_event_log`）。
   - `decode_contract_event_logs(registry, logs)`：按输入顺序批量还原，
     返回等长 tuple；任一日志失败即整体抛出，不返回部分结果。
+  - `match_contract_event_log_values(registry, log, values)`：复用同一套
+    选择、匿名显式指定、缺省 topic0 分派与显式事件 topic0 核对语义定位
+    事件，再委托 `match_event_log_values` 核验候选值；命中返回按声明
+    顺序排列的值 tuple，任一值或动态 indexed 哈希不同返回 None。
+  - `match_contract_event_logs_values(registry, logs, values)`：按输入
+    顺序批量核验，`values` 为与 `logs` 等长、逐篇对应的候选值序列，
+    返回等长的值 tuple/None 序列；任一日志分派、还原或候选值核验失败
+    即整体抛出，不返回部分结果。
   - 分派失败抛 `AbiLogDispatchError`（见异常表）；分派成功后的日志还原
     委托 `decode_event_log`，`AbiEventError` 与错误码原样传播。
 - 已实现：函数 ABI、selector 与函数调用 calldata 编解码。
@@ -242,7 +259,7 @@ data 编解码、合约部署 constructor 参数编解码。
   | `EVENT_TOPIC0_MISMATCH` | 非匿名事件 topics[0] 与签名 topic0 不一致 |
   | `EVENT_TOPIC_VALUE` | topic 非 32 字节，或 indexed 基础值无法严格解码 |
   | `EVENT_DATA_INVALID` | data 十六进制/字节非法，或非 indexed tuple 解码失败 |
-  | `EVENT_VALUE_INVALID` | `encode_event_log` 的 event 非 EventDefinition、values 非 list/tuple、数量不符，或任一值与声明类型不匹配 |
+  | `EVENT_VALUE_INVALID` | `encode_event_log` 的 event 非 EventDefinition、values 非 list/tuple、数量不符，或任一值与声明类型不匹配；`match_event_log_values` 的 values 非 list/tuple、数量不符，或动态 indexed 候选无法按声明类型生成索引值 |
 
 - `AbiLogDispatchError`：合约级事件注册表构建与日志分派六类失败，同样
   通过 `code` 携带错误码：

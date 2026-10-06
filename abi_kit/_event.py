@@ -11,6 +11,9 @@
 - :func:`encode_event_log`：按声明值生成日志 topics 与 data，返回不可变
   :class:`EncodedEventLog`，与 :func:`decode_event_log` 的 topics 数量、
   补零方向与 data tuple 口径一致。
+- :func:`match_event_log_values`：在 :func:`decode_event_log` 校验通过
+  的前提下，核验一组按声明顺序给出的候选值是否与日志一致，命中返回
+  声明顺序 tuple，否则返回 None。
 
 日志口径：
 
@@ -34,6 +37,18 @@
   元素、tuple 递归连接成员；基础值用 32 字节规范字（bytesM 右补零），
   递归成员与整段结果右补齐到 32 字节倍数，string 与动态 bytes 内容不
   补零。
+
+候选值核验口径（match_event_log_values）：
+
+- 先按 :func:`decode_event_log` 完成主题数量、topic0、topic 基础值与
+  data 的全部严格校验，失败沿用其错误码；
+- values 按声明顺序接受 list 或 tuple，数量不符或非序列抛
+  EVENT_VALUE_INVALID；非 indexed 与可还原 indexed 基础值候选直接与
+  解码值比较；
+- indexed 的 string、动态 bytes、数组与 tuple 按上面的事件索引特殊编码
+  重算 32 字节主题与日志 topic 比较，候选不能编码为其声明类型时抛
+  EVENT_VALUE_INVALID；
+- 全部一致返回声明顺序 tuple，任一值或哈希不同只返回 None。
 
 所有失败统一抛出 :class:`abi_kit.AbiEventError`，以 ``code`` 区分。
 """
@@ -499,6 +514,20 @@ def _encode_indexed_topic(abi_type: ABIType, value) -> bytes:
     return keccak_256(_indexed_preimage(abi_type, value))
 
 
+def _is_hashed_indexed_type(abi_type: ABIType) -> bool:
+    """该 indexed 类型是否走事件索引特殊编码（Keccak-256 主题）。
+
+    与 :func:`_encode_indexed_topic` 的分支保持一致：string、动态 bytes、
+    数组（含定长数组）与 tuple 取哈希主题；address/bool/intM/uintM/bytesM
+    直接生成可还原的 32 字节规范字。
+    """
+    if isinstance(abi_type, ElementaryType):
+        return abi_type.kind == "string" or (
+            abi_type.kind == "bytes" and abi_type.byte_size is None
+        )
+    return isinstance(abi_type, (ArrayType, TupleType))
+
+
 def encode_event_log(event: EventDefinition, values) -> EncodedEventLog:
     """按声明值编码事件日志，返回不可变 :class:`EncodedEventLog`。
 
@@ -556,3 +585,61 @@ def encode_event_log(event: EventDefinition, values) -> EncodedEventLog:
         raise _value_invalid(f"事件值编码失败：{exc}") from None
 
     return EncodedEventLog(event, tuple(topics), data)
+
+
+# ---- 候选值核验 ------------------------------------------------------------
+
+
+def match_event_log_values(event: EventDefinition, topics, data, values):
+    """核验一组候选值是否与事件日志一致。
+
+    先委托 :func:`decode_event_log` 完成全部日志校验——topics 容器与数量、
+    非匿名事件的 topic0、可还原 indexed 基础值的严格解码，以及非 indexed
+    参数 data 的严格 ABI 解码；这些失败沿用 :func:`decode_event_log` 的
+    :class:`abi_kit.AbiEventError` 与错误码（EVENT_TOPIC_COUNT /
+    EVENT_TOPIC0_MISMATCH / EVENT_TOPIC_VALUE / EVENT_DATA_INVALID），
+    event 不是 :class:`EventDefinition` 时同样得到 ``EVENT_ABI_INVALID``。
+
+    校验通过后，``values`` 按参数声明顺序排列，接受 list 或 tuple，数量
+    必须与事件参数数相等，否则抛 code 为 ``EVENT_VALUE_INVALID`` 的
+    :class:`abi_kit.AbiEventError`。逐位比较候选：
+
+    - 非 indexed 候选等于 data 解码值；
+    - indexed 的 address/bool/intM/uintM/bytesM 候选等于 topic 解码值；
+    - indexed 的 string、动态 bytes、数组与 tuple 不可逆，候选按
+      :func:`encode_event_log` 的事件索引特殊编码重算 32 字节 Keccak-256
+      主题，与日志中的 topic 逐字节比较；候选值无法生成其声明类型的索引
+      值时抛 ``EVENT_VALUE_INVALID``。
+
+    全部一致时按声明顺序返回候选值 tuple；任一值或重算哈希不同则返回
+    None（不抛错）。动态哈希主题不可逆，核验只比较哈希，不还原原值。
+    """
+    # 先完成主题数量、topic0、topic 基础值与 data 的全部严格校验；event
+    # 类型错误在此同样得到 EVENT_ABI_INVALID。
+    decoded = decode_event_log(event, topics, data)
+
+    if not isinstance(values, (list, tuple)):
+        raise _value_invalid(
+            f"values 必须是 list 或 tuple，得到 {type(values).__name__}"
+        )
+    if len(values) != len(event.inputs):
+        raise _value_invalid(
+            f"values 数量应为 {len(event.inputs)}，得到 {len(values)}"
+        )
+
+    try:
+        for param, candidate, actual in zip(event.inputs, values, decoded):
+            if param.indexed and _is_hashed_indexed_type(param.abi_type):
+                # 动态 indexed：按事件索引特殊编码重算 32 字节主题，与日志
+                # 中 decode_event_log 原样保留的 topic bytes 逐字节比较。
+                if _encode_indexed_topic(param.abi_type, candidate) != actual:
+                    return None
+            elif candidate != actual:
+                # 非 indexed 值或可还原 indexed 基础值直接与解码值比较。
+                return None
+    except (ABIValueError, ABITypeError) as exc:
+        raise _value_invalid(
+            f"动态 indexed 候选值无法生成声明类型索引值：{exc}"
+        ) from None
+
+    return tuple(values)

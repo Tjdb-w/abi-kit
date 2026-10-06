@@ -16,6 +16,8 @@ from abi_kit import (
     decode_contract_event_log,
     decode_contract_event_logs,
     event_topic0,
+    match_contract_event_log_values,
+    match_contract_event_logs_values,
     parse_event_registry,
 )
 
@@ -98,6 +100,33 @@ TUPLE_ENTRY = {
     ],
 }
 
+TUPLE_INDEXED_ENTRY = {
+    "type": "event",
+    "name": "Box",
+    "inputs": [
+        {
+            "indexed": True,
+            "name": "p",
+            "type": "tuple",
+            "components": [
+                {"name": "token", "type": "address"},
+                {"name": "amount", "type": "uint256"},
+            ],
+        },
+        {"indexed": False, "name": "note", "type": "string"},
+    ],
+}
+DYN_INDEXED_ENTRY = {
+    "type": "event",
+    "name": "Traced",
+    "inputs": [
+        {"indexed": True, "name": "tag", "type": "string"},
+        {"indexed": True, "name": "raw", "type": "bytes"},
+        {"indexed": True, "name": "nums", "type": "uint256[]"},
+        {"indexed": False, "name": "n", "type": "uint256"},
+    ],
+}
+
 FULL_ABI = [
     {"type": "function", "name": "transfer", "inputs": [], "outputs": []},
     {"type": "constructor", "inputs": []},
@@ -108,6 +137,8 @@ FULL_ABI = [
     LOGGED_UINT_ENTRY,
     LOGGED_ADDR_ENTRY,
     TUPLE_ENTRY,
+    TUPLE_INDEXED_ENTRY,
+    DYN_INDEXED_ENTRY,
 ]
 
 
@@ -128,7 +159,17 @@ class ParseEventRegistryTests(unittest.TestCase):
         self.assertEqual(from_json, from_list)
         self.assertEqual(
             [event.name for event in from_list.events],
-            ["Transfer", "Approval", "Marker", "Named", "Logged", "Logged", "Pair"],
+            [
+                "Transfer",
+                "Approval",
+                "Marker",
+                "Named",
+                "Logged",
+                "Logged",
+                "Pair",
+                "Box",
+                "Traced",
+            ],
         )
 
     def test_skips_non_event_entries(self):
@@ -460,6 +501,314 @@ class DecodeContractEventLogsTests(unittest.TestCase):
     def test_registry_type_checked(self):
         with self.assertRaises(AbiLogDispatchError) as ctx:
             decode_contract_event_logs(FULL_ABI, [])
+        self.assertEqual(ctx.exception.code, "LOG_ABI_INVALID")
+
+
+class MatchContractEventLogValuesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.registry = parse_event_registry(FULL_ABI)
+
+    def _log(self, event_def, values, **over):
+        from abi_kit import encode_event_log
+
+        encoded = encode_event_log(event_def, values)
+        # 刻意使用十六进制字符串输入，覆盖 topics/data 规范化路径。
+        log = {"topics": list(encoded.topics_hex), "data": encoded.data_hex}
+        log.update(over)
+        return log
+
+    def _event(self, name=None, signature=None):
+        target = signature or name
+        return self.registry._by_signature[target] if signature else next(
+            event for event in self.registry.events if event.name == name
+        )
+
+    def test_match_by_topic0_dispatch(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        values = [ADDR_A, ADDR_B, 1000]
+        log = self._log(event, values)
+        self.assertEqual(
+            match_contract_event_log_values(self.registry, log, values),
+            tuple(values),
+        )
+
+    def test_non_match_returns_none(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        log = self._log(event, [ADDR_A, ADDR_B, 1000])
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, [ADDR_A, ADDR_B, 1001]
+            )
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, [ADDR_A, ADDR_A, 1000]
+            )
+        )
+
+    def test_explicit_event_name_and_signature(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        values = [ADDR_A, ADDR_B, 5]
+        for selector in ("Transfer", "Transfer(address,address,uint256)"):
+            log = self._log(event, values, event=selector)
+            self.assertEqual(
+                match_contract_event_log_values(self.registry, log, values),
+                tuple(values),
+            )
+
+    def test_anonymous_explicit_match(self):
+        event = self._event(name="Marker")
+        values = [7]
+        log = self._log(event, values, event="Marker(uint256)")
+        self.assertEqual(
+            match_contract_event_log_values(self.registry, log, values), (7,)
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(self.registry, log, [8])
+        )
+
+    def test_dynamic_indexed_match_and_none(self):
+        event = self._event(name="Traced")
+        values = ["hello", b"\x01\x02", [1, 2], 9]
+        log = self._log(event, values)
+        self.assertEqual(
+            match_contract_event_log_values(self.registry, log, list(values)),
+            tuple(values),
+        )
+        # 每个动态 indexed 候选改变都使哈希不同 → None。
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, ["hell", b"\x01\x02", [1, 2], 9]
+            )
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, ["hello", b"\x01\x03", [1, 2], 9]
+            )
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, ["hello", b"\x01\x02", [1, 3], 9]
+            )
+        )
+        # 非 indexed data 值不同。
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, ["hello", b"\x01\x02", [1, 2], 10]
+            )
+        )
+
+    def test_indexed_tuple_match_and_none(self):
+        event = self._event(name="Box")
+        values = [(ADDR_A, 77), "note"]
+        log = self._log(event, values)
+        self.assertEqual(
+            match_contract_event_log_values(self.registry, log, list(values)),
+            tuple(values),
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, [(ADDR_A, 78), "note"]
+            )
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(
+                self.registry, log, [(ADDR_A, 77), "notex"]
+            )
+        )
+
+    def test_overload_selected_by_signature(self):
+        uint_event = self._event(signature="Logged(uint256)")
+        values = [9]
+        log = self._log(uint_event, values, event="Logged(uint256)")
+        self.assertEqual(
+            match_contract_event_log_values(self.registry, log, values),
+            (9,),
+        )
+        self.assertIsNone(
+            match_contract_event_log_values(self.registry, log, [10])
+        )
+
+    def test_values_count_mismatch_raises_event_error(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        log = self._log(event, [ADDR_A, ADDR_B, 1])
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_log_values(self.registry, log, [ADDR_A, ADDR_B])
+        self.assertEqual(ctx.exception.code, "EVENT_VALUE_INVALID")
+
+    def test_invalid_dynamic_candidate_raises_event_error(self):
+        event = self._event(name="Traced")
+        log = self._log(event, ["hello", b"", [1], 0])
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_log_values(
+                self.registry, log, [1, b"", [1], 0]
+            )
+        self.assertEqual(ctx.exception.code, "EVENT_VALUE_INVALID")
+
+    def test_dispatch_failures_keep_dispatch_codes(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        log = self._log(event, [ADDR_A, ADDR_B, 1])
+
+        # 显式事件与 topic0 不一致。
+        bad = dict(log, event="Approval")
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_log_values(self.registry, bad, [ADDR_A, ADDR_B, 1])
+        self.assertEqual(ctx.exception.code, "LOG_TOPIC_MISMATCH")
+
+        # 未知显式事件。
+        bad = dict(log, event="Nope")
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_log_values(self.registry, bad, [ADDR_A, ADDR_B, 1])
+        self.assertEqual(ctx.exception.code, "LOG_EVENT_NOT_FOUND")
+
+        # 匿名事件未显式选择。
+        anon_log = {"topics": [b"\x00" * 31 + b"\x01"], "data": "0x"}
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_log_values(self.registry, anon_log, [1])
+        self.assertEqual(ctx.exception.code, "LOG_EVENT_NOT_FOUND")
+
+        # 日志不是映射。
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_log_values(self.registry, 42, [])
+        self.assertEqual(ctx.exception.code, "LOG_ENTRY_INVALID")
+
+    def test_decode_layer_errors_keep_event_codes(self):
+        event = self._event(signature="Transfer(address,address,uint256)")
+        # topics 数量不符：分派成功后抛 AbiEventError。
+        log = self._log(event, [ADDR_A, ADDR_B, 1])
+        log["topics"] = log["topics"][:2]
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_log_values(self.registry, log, [ADDR_A, ADDR_B, 1])
+        self.assertEqual(ctx.exception.code, "EVENT_TOPIC_COUNT")
+
+        # data 含非法严格填充。
+        log = self._log(event, [ADDR_A, ADDR_B, 1])
+        log["data"] = "0x" + (word(1) + b"\x00").hex()
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_log_values(
+                self.registry, log, [ADDR_A, ADDR_B, 1]
+            )
+        self.assertEqual(ctx.exception.code, "EVENT_DATA_INVALID")
+
+    def test_registry_type_checked(self):
+        log = transfer_log()
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_log_values([TRANSFER_ENTRY], log, [ADDR_A, ADDR_B, 1])
+        self.assertEqual(ctx.exception.code, "LOG_ABI_INVALID")
+
+
+class MatchContractEventLogsValuesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.registry = parse_event_registry(FULL_ABI)
+
+    def _log(self, signature, values, **over):
+        from abi_kit import encode_event_log
+
+        event = self.registry._by_signature[signature]
+        encoded = encode_event_log(event, values)
+        log = {"topics": list(encoded.topics_hex), "data": encoded.data_hex}
+        log.update(over)
+        return log
+
+    def test_batch_preserves_order_with_matches_and_none(self):
+        transfer_sig = "Transfer(address,address,uint256)"
+        approval_sig = "Approval(address,address,uint256)"
+        logs = [
+            self._log(transfer_sig, [ADDR_A, ADDR_B, 1]),
+            self._log(approval_sig, [ADDR_B, ADDR_A, 2]),
+            self._log(transfer_sig, [ADDR_A, ADDR_B, 3]),
+        ]
+        values = [
+            [ADDR_A, ADDR_B, 1],      # 命中
+            [ADDR_B, ADDR_A, 99],     # 不命中
+            [ADDR_A, ADDR_A, 3],      # 不命中
+        ]
+        results = match_contract_event_logs_values(self.registry, logs, values)
+        self.assertIsInstance(results, tuple)
+        self.assertEqual(len(results), 3)
+        self.assertEqual(results[0], (ADDR_A, ADDR_B, 1))
+        self.assertIsNone(results[1])
+        self.assertIsNone(results[2])
+
+    def test_batch_empty(self):
+        self.assertEqual(match_contract_event_logs_values(self.registry, [], []), ())
+
+    def test_batch_anonymous_and_dynamic(self):
+        marker_log = {
+            "topics": ["0x" + word(7).hex()],
+            "data": "0x",
+            "event": "Marker(uint256)",
+        }
+        traced_log = self._log(
+            "Traced(string,bytes,uint256[],uint256)",
+            ["s", b"\xab", [1, 2], 0],
+        )
+        results = match_contract_event_logs_values(
+            self.registry,
+            [marker_log, traced_log],
+            [[7], ["s", b"\xab", [1, 2], 0]],
+        )
+        self.assertEqual(results, ((7,), ("s", b"\xab", [1, 2], 0)))
+
+    def test_batch_failure_is_atomic(self):
+        transfer_sig = "Transfer(address,address,uint256)"
+        good_log = self._log(transfer_sig, [ADDR_A, ADDR_B, 1])
+
+        # 分派失败。
+        bad_dispatch = {"topics": [word(1)], "data": "0x"}
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_logs_values(
+                self.registry, [good_log, bad_dispatch],
+                [[ADDR_A, ADDR_B, 1], [1]],
+            )
+        self.assertEqual(ctx.exception.code, "LOG_EVENT_NOT_FOUND")
+
+        # 日志还原失败。
+        bad_decode = self._log(transfer_sig, [ADDR_A, ADDR_B, 1])
+        bad_decode["topics"] = bad_decode["topics"][:2]
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_logs_values(
+                self.registry, [good_log, bad_decode],
+                [[ADDR_A, ADDR_B, 1], [ADDR_A, ADDR_B, 1]],
+            )
+        self.assertEqual(ctx.exception.code, "EVENT_TOPIC_COUNT")
+
+        # 候选值非法。
+        with self.assertRaises(AbiEventError) as ctx:
+            match_contract_event_logs_values(
+                self.registry, [good_log, good_log],
+                [[ADDR_A, ADDR_B, 1], [ADDR_A, ADDR_B]],
+            )
+        self.assertEqual(ctx.exception.code, "EVENT_VALUE_INVALID")
+
+    def test_batch_requires_equal_lengths(self):
+        log = self._log(
+            "Transfer(address,address,uint256)", [ADDR_A, ADDR_B, 1]
+        )
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_logs_values(self.registry, [log], [])
+        self.assertEqual(ctx.exception.code, "LOG_ENTRY_INVALID")
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_logs_values(
+                self.registry, [log], [[ADDR_A, ADDR_B, 1], [ADDR_A, ADDR_B, 1]]
+            )
+        self.assertEqual(ctx.exception.code, "LOG_ENTRY_INVALID")
+
+    def test_batch_sequence_shapes(self):
+        for bad_logs in ("logs", b"logs", 42, None):
+            with self.assertRaises(AbiLogDispatchError) as ctx:
+                match_contract_event_logs_values(self.registry, bad_logs, [])
+            self.assertEqual(ctx.exception.code, "LOG_ENTRY_INVALID")
+        for bad_values in ("values", b"values", 42, None):
+            with self.assertRaises(AbiLogDispatchError) as ctx:
+                match_contract_event_logs_values(self.registry, [], bad_values)
+            self.assertEqual(ctx.exception.code, "LOG_ENTRY_INVALID")
+
+    def test_batch_registry_type_checked(self):
+        with self.assertRaises(AbiLogDispatchError) as ctx:
+            match_contract_event_logs_values(FULL_ABI, [], [])
         self.assertEqual(ctx.exception.code, "LOG_ABI_INVALID")
 
 

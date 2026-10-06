@@ -5,12 +5,13 @@
 - 值层完整编解码（encode_abi_value / decode_abi_value）；
 - 嵌套值的路径化读取与定点替换
   （get_abi_value_at_path / replace_abi_value_at_path）；
-- 事件 ABI 解析、签名 topic0、日志还原校验与日志编码
+- 事件 ABI 解析、签名 topic0、日志还原校验、日志编码与候选值核验
   （parse_event_abi / event_topic0 / decode_event_log /
-  encode_event_log）；
-- 合约级事件注册表与日志分派还原
+  encode_event_log / match_event_log_values）；
+- 合约级事件注册表、日志分派还原与候选值核验
   （parse_event_registry / decode_contract_event_log /
-  decode_contract_event_logs）；
+  decode_contract_event_logs / match_contract_event_log_values /
+  match_contract_event_logs_values）；
 - 函数 ABI 解析、selector 与函数调用 calldata 编解码
   （parse_function_abi / function_selector / canonical_function_signature /
   encode_function_call / decode_function_call）；
@@ -59,6 +60,8 @@ from ._contract import (
     EventRegistry,
     decode_contract_event_log,
     decode_contract_event_logs,
+    match_contract_event_log_values,
+    match_contract_event_logs_values,
     parse_event_registry,
 )
 from ._contract_call import (
@@ -85,6 +88,7 @@ from ._event import (
     decode_event_log,
     encode_event_log,
     event_topic0,
+    match_event_log_values,
     parse_event_abi,
 )
 from ._exceptions import (
@@ -168,11 +172,14 @@ __all__ = [
     "event_topic0",
     "decode_event_log",
     "encode_event_log",
+    "match_event_log_values",
     "EncodedEventLog",
     "EventRegistry",
     "parse_event_registry",
     "decode_contract_event_log",
     "decode_contract_event_logs",
+    "match_contract_event_log_values",
+    "match_contract_event_logs_values",
     "FunctionDefinition",
     "FunctionParameter",
     "FunctionArgument",

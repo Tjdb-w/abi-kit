@@ -11,6 +11,12 @@
   tuple。
 - :func:`decode_contract_event_logs`：按输入顺序批量还原日志序列，返回
   等长 tuple；任一日志失败即整体抛出，不返回部分结果。
+- :func:`match_contract_event_log_values`：复用同一套分派语义定位事件，
+  再委托 :func:`abi_kit.match_event_log_values` 核验候选值，命中返回
+  声明顺序 tuple，否则返回 None。
+- :func:`match_contract_event_logs_values`：按输入顺序批量核验，values
+  为与 logs 等长、逐日志对应的候选值序列，返回等长的 tuple/None 序列；
+  任一日志失败即整体抛出，不返回部分结果。
 
 日志口径：
 
@@ -49,6 +55,7 @@ from ._event import (
     _topic_bytes,
     decode_event_log,
     event_topic0,
+    match_event_log_values,
     parse_event_abi,
 )
 from ._exceptions import AbiEventError, AbiLogDispatchError
@@ -301,3 +308,59 @@ def decode_contract_event_logs(registry, logs) -> tuple:
             f"日志序列必须是 list 或 tuple，得到 {type(logs).__name__}"
         )
     return tuple(decode_contract_event_log(registry, log) for log in logs)
+
+
+# ---- 候选值核验 ------------------------------------------------------------
+
+
+def match_contract_event_log_values(registry, log, values):
+    """分派单条合约事件日志并核验候选值。
+
+    ``registry`` 为 :func:`parse_event_registry` 构建的
+    :class:`EventRegistry`；``log`` 为映射（``topics``/``data`` 必填，
+    可选 ``event``）；``values`` 按参数声明顺序接受 list 或 tuple，口径
+    同 :func:`abi_kit.match_event_log_values`。
+
+    事件选择、匿名事件显式指定、缺省时的 topic0 分派与显式事件 topic0
+    核对完全复用 :func:`decode_contract_event_log` 的语义。定位事件后委托
+    :func:`abi_kit.match_event_log_values` 核验：命中返回按声明顺序排列的
+    值 tuple，任一值或动态 indexed 哈希不同返回 None。
+
+    分派失败抛 :class:`abi_kit.AbiLogDispatchError`；分派成功后的日志
+    还原与候选值核验失败抛 :class:`abi_kit.AbiEventError`（错误码不变）。
+    """
+    _require_registry(registry)
+    event, topics, data = _dispatch(registry, log)
+    return match_event_log_values(event, topics, data, values)
+
+
+def match_contract_event_logs_values(registry, logs, values) -> tuple:
+    """按输入顺序批量分派日志并逐篇核验候选值。
+
+    ``logs`` 为日志映射组成的 list/tuple；``values`` 为等长的候选值序列，
+    第 i 项对应第 i 条日志（每项各自为该事件参数声明顺序的 list/tuple）。
+    返回与输入等长、顺序一致的 tuple，每项为命中的值 tuple 或 None，口径
+    同 :func:`match_contract_event_log_values`。
+
+    任一日志分派、还原或候选值核验失败即整体抛出，不返回部分结果；
+    ``logs``/``values`` 不是 list/tuple（str、bytes 不算）或两者长度不
+    一致时抛 :class:`abi_kit.AbiLogDispatchError`（code 为
+    ``LOG_ENTRY_INVALID``）。
+    """
+    _require_registry(registry)
+    if isinstance(logs, (str, bytes)) or not isinstance(logs, (list, tuple)):
+        raise _entry_invalid(
+            f"日志序列必须是 list 或 tuple，得到 {type(logs).__name__}"
+        )
+    if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+        raise _entry_invalid(
+            f"候选值序列必须是 list 或 tuple，得到 {type(values).__name__}"
+        )
+    if len(logs) != len(values):
+        raise _entry_invalid(
+            f"日志数量 {len(logs)} 与候选值序列数量 {len(values)} 不一致"
+        )
+    return tuple(
+        match_contract_event_log_values(registry, log, candidates)
+        for log, candidates in zip(logs, values)
+    )
