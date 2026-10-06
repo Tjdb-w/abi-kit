@@ -26,6 +26,8 @@
   与 creation bytecode 逐字节不一致。
 - AbiContractCallError：合约调用分派路径（function / receive /
   fallback）的注册表构建、目标选择与数据非法失败，以 ``code`` 唯一区分。
+- AbiContractAbiError：只读合约 ABI 清单（parse_contract_abi）的根、
+  条目、重复登记、签名/selector/topic0 冲突失败，以 ``code`` 唯一区分。
 
 所有异常各自独立，均为 ValueError 子类。
 """
@@ -245,6 +247,42 @@ class AbiContractCallError(ValueError):
     def __init__(self, code: str, message: str):
         if code not in self.CODES:
             raise ValueError(f"未知的合约调用分派错误码：{code!r}")
+        self.code = code
+        super().__init__(f"{code}: {message}")
+
+
+class AbiContractAbiError(ValueError):
+    """只读合约 ABI 清单解析（:func:`parse_contract_abi`）失败。
+
+    ``code`` 取下列唯一错误码之一：
+
+    - ``ABI_ENTRY_INVALID``：条目未知（缺 ``type`` 或类型不在
+      function/event/error/constructor/receive/fallback 之中、条目不是
+      JSON 对象）、缺必填字段、name 或 type 非法、参数描述无法形成 ABI
+      类型等；
+    - ``ABI_ROOT_INVALID``：ABI 输入类型错误（不是 JSON 字符串或
+      list/tuple 条目数组），JSON 解析失败，或 JSON 根不是数组；
+    - ``ABI_ENTRY_DUPLICATE``：constructor、receive、fallback 条目重复，
+      或 receive/fallback 带有非空 inputs；
+    - ``ABI_SIGNATURE_COLLISION``：function、error 或 event 的规范签名
+      在同类条目内重复，或同类 function、同类 error 的四字节 selector
+      相同（function 与 error 的 selector 互不相干）；
+    - ``ABI_TOPIC0_COLLISION``：两个不同的非匿名事件签名 topic0 相同
+      （匿名事件不进入 topic0 索引，不参与此项冲突）。
+    """
+
+    #: 全部公开错误码。
+    CODES = (
+        "ABI_ENTRY_INVALID",
+        "ABI_ROOT_INVALID",
+        "ABI_ENTRY_DUPLICATE",
+        "ABI_SIGNATURE_COLLISION",
+        "ABI_TOPIC0_COLLISION",
+    )
+
+    def __init__(self, code: str, message: str):
+        if code not in self.CODES:
+            raise ValueError(f"未知的合约 ABI 清单错误码：{code!r}")
         self.code = code
         super().__init__(f"{code}: {message}")
 

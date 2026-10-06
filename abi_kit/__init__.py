@@ -27,6 +27,10 @@
 - 合约调用分派，统一处理 function / receive / fallback
   （parse_contract_call_registry / encode_contract_call /
   decode_contract_call）。
+- 只读整份合约 ABI 清单解析（parse_contract_abi）：按声明顺序登记
+  function / event / error / constructor / receive / fallback 六类条目，
+  返回不可变 ContractAbiDefinition，并给出有序签名、selector 与非匿名
+  事件 topic0 序列。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层七类失败抛出带错误码的 AbiPathError，事件层
@@ -43,7 +47,9 @@ AbiErrorTrailingDataError（元数据错误与函数路径共用 AbiMetadataErro
 AbiTrailingDataError（元数据错误同样共用 AbiMetadataError）；合约调用
 分派（function / receive / fallback）的注册表构建、目标选择与数据非法
 失败抛带错误码的 AbiContractCallError，值层失败仍抛 ABIValueError、
-尾随数据仍抛 AbiTrailingDataError。
+尾随数据仍抛 AbiTrailingDataError；只读合约 ABI 清单
+（parse_contract_abi）的根、条目、重复登记与签名/selector/topic0 冲突
+统一抛带错误码的 AbiContractAbiError。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
@@ -64,6 +70,10 @@ from ._contract import (
     match_contract_event_log_values,
     match_contract_event_logs_values,
     parse_event_registry,
+)
+from ._contract_abi import (
+    ContractAbiDefinition,
+    parse_contract_abi,
 )
 from ._contract_call import (
     ContractCallRegistry,
@@ -94,6 +104,7 @@ from ._event import (
 )
 from ._exceptions import (
     AbiCalldataLengthError,
+    AbiContractAbiError,
     AbiContractCallError,
     AbiErrorDataLengthError,
     AbiErrorNotFoundError,
@@ -162,6 +173,7 @@ __all__ = [
     "AbiErrorTrailingDataError",
     "AbiDeploymentDataError",
     "AbiContractCallError",
+    "AbiContractAbiError",
     "ABIType",
     "ElementaryType",
     "ArrayType",
@@ -226,4 +238,6 @@ __all__ = [
     "parse_contract_call_registry",
     "encode_contract_call",
     "decode_contract_call",
+    "ContractAbiDefinition",
+    "parse_contract_abi",
 ]

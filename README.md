@@ -221,6 +221,28 @@ data 编解码、合约部署 constructor 参数编解码。
     结果。`abi` 位置也可直接传入已解析的 `ContractCallRegistry`；现有
     函数、error、constructor 与事件日志入口的输入输出和异常不变。
 
+- 已实现：只读整份合约 ABI 清单解析。
+  - `parse_contract_abi(abi)`：一次解析整份 ABI JSON 字符串或等价
+    list/tuple 条目数组，六类条目（function / event / error /
+    constructor / receive / fallback）全部按声明顺序登记，返回不可变
+    `ContractAbiDefinition`。字段与类型语义沿用各现有单条目解析器，本
+    入口只做清单解析与跨条目校验，不要求各类条目齐全。
+  - `functions` / `events` / `errors` 为现有 `FunctionDefinition` /
+    `EventDefinition` / `ErrorDefinition` 的有序 tuple；`constructor`
+    为现有 `ConstructorDefinition` 或 `None`；`receive` 与 `fallback`
+    为条目是否已登记的布尔值。
+  - `function_signatures` / `event_signatures` / `error_signatures`、
+    `function_selectors` / `error_selectors` / `event_topic0s` 均按声明
+    顺序给出；selector 与非匿名事件 topic0 为小写 `0x` 十六进制，匿名
+    事件不进入 `event_topic0s`。
+  - constructor、receive、fallback 各至多一个，且 receive/fallback 不
+    接受非空 inputs；function、error、event 同类规范签名不得重复，同类
+    function、同类 error 的 selector 不得相同，不同非匿名事件的 topic0
+    不得相同；function 与 error 的 selector 互不相干。空 ABI 得到空清单
+    （constructor 为 `None`、receive/fallback 为 `False`），相同输入
+    重复解析稳定；其他入口的输入输出和异常不变。
+  - 清单解析的五类失败统一抛 `AbiContractAbiError`（见异常表）。
+
 ## 路径
 
 - 点号连接 tuple 字段名：`inner.items[2].amount`。
@@ -354,6 +376,21 @@ data 编解码、合约部署 constructor 参数编解码。
   `ABIValueError`；参数按声明类型消费完后仍有尾随字节抛
   `AbiTrailingDataError`。调用层失败即整体抛出，不返回部分结果。现有
   函数、error、constructor 与事件日志入口的输入输出和异常不变。
+
+
+- 只读合约 ABI 清单（`parse_contract_abi`）的失败统一抛
+  `AbiContractAbiError`（独立的 `ValueError` 子类），通过 `code` 携带
+  唯一错误码；只做清单解析与校验，不改变其他入口的输入输出和异常：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `ABI_ENTRY_INVALID` | 条目不是 JSON 对象、缺 type 或类型未知、缺必填字段、名称或类型非法、参数无法形成 ABI 类型 |
+  | `ABI_ROOT_INVALID` | 1）ABI 输入类型错误（不是 JSON 字符串或 list/tuple 条目数组）；2）JSON 解析失败或 JSON 根不是数组 |
+  | `ABI_ENTRY_DUPLICATE` | constructor、receive、fallback 重复，或 receive/fallback 的 inputs 非空 |
+  | `ABI_SIGNATURE_COLLISION` | function、error 或 event 同类规范签名重复，或同类 function、同类 error 的 selector 相同 |
+  | `ABI_TOPIC0_COLLISION` | 不同非匿名事件的 topic0 相同（匿名事件不进入 topic0 序列，不参与冲突） |
+
+  function 与 error 的 selector 相同不冲突；空 ABI 得到空清单。
 
 ## 约定
 
