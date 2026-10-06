@@ -45,7 +45,14 @@ from __future__ import annotations
 
 from ._codec import _encode, decode_abi_value
 from ._exceptions import ABITypeError, ABIValueError, AbiPathError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WHITESPACE = " \t\n\r\f\v"
 _NAME_START = set(
@@ -115,7 +122,7 @@ class _NamedParser:
             raise self._error("此处应为基础类型或元组")
         return self._parse_suffixes(head)
 
-    def _parse_elementary(self) -> ElementaryType:
+    def _parse_elementary(self) -> ABIType:
         text = self._text
         start = self._pos
         while self._pos < self._len:
@@ -127,6 +134,8 @@ class _NamedParser:
         word = text[start:self._pos]
         if word in ("address", "bool", "string", "bytes"):
             return ElementaryType(word)
+        if word == "function":
+            return FunctionType()
         if word.startswith("bytes") and len(word) > len("bytes"):
             digits = self._digits(word, "bytes")
             try:
@@ -134,6 +143,33 @@ class _NamedParser:
             except ABITypeError:
                 raise self._error(
                     f"bytesM 的 M 必须在 1 到 32 之间，得到 {digits}"
+                ) from None
+        if word.startswith(("ufixed", "fixed")):
+            if word.startswith("ufixed"):
+                prefix, signed = "ufixed", False
+            else:
+                prefix, signed = "fixed", True
+            rest = word[len(prefix):]
+            parts = rest.split("x")
+            if (
+                len(parts) != 2
+                or not parts[0]
+                or not parts[1]
+                or not all(p.isascii() and p.isdigit() for p in parts)
+            ):
+                raise self._error(f"不是合法的基础类型：{word!r}")
+            m_digits, n_digits = parts
+            if (len(m_digits) > 1 and m_digits[0] == "0") or (
+                len(n_digits) > 1 and n_digits[0] == "0"
+            ):
+                raise self._error(f"类型宽度不允许前导零：{word!r}")
+            bit_size, scale = int(m_digits), int(n_digits)
+            try:
+                return FixedPointType(signed, bit_size, scale)
+            except ABITypeError:
+                raise self._error(
+                    f"{prefix} 的 M 必须是 8 到 256 之间 8 的倍数、N 必须在 1 到 "
+                    f"80 之间，得到 {bit_size}x{scale}"
                 ) from None
         if word.startswith("uint") or word.startswith("int"):
             kind = "uint" if word.startswith("uint") else "int"

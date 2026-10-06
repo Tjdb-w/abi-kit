@@ -13,15 +13,18 @@ data 编解码、合约部署 constructor 参数编解码。
 - 已实现：ABI 类型解析与规范化。
   - `parse_abi_type(type_string)`：解析 ABI 类型字符串，返回不可变类型对象。
   - `format_abi_type(abi_type)`：返回不含空白的规范类型字符串。
-  - 覆盖 `uintM`/`intM`（M 为 8–256 的 8 的倍数）、`address`、`bool`、
-    `string`、`bytes`、`bytesM`（M 为 1–32）、`T[]`、`T[n]` 及任意深度元组，
-    嵌套最多 128 层。
+  - 覆盖 `uintM`/`intM`（M 为 8–256 的 8 的倍数）、
+    `fixedMxN`/`ufixedMxN`（M 为 8–256 的 8 的倍数、N 为 1–80，均无前导
+    零）、`address`、`bool`、`string`、`bytes`、`bytesM`（M 为 1–32）、
+    `function`（24 字节）、`T[]`、`T[n]` 及任意深度元组，嵌套最多 128 层。
 - 已实现：完整值编解码。
   - `encode_abi_value(abi_type, value)` / `decode_abi_value(abi_type, data)`，
     遵循 head/tail 布局，解码采用严格规范（紧密排列、填充必须为零）。
   - 值口径：uintM/intM 为 `int`，bool 为 `bool`，string 为 `str`，
-    bytes/bytesM 为 `bytes`，address 为小写 `"0x"+40 个十六进制字符`，
-    数组为 `list`，元组为 `tuple`。
+    bytes/bytesM 为 `bytes`，fixedMxN/ufixedMxN 为 `decimal.Decimal`
+    （编码只接受 Decimal，解码严格还原恰为 N 位小数），function 为 24
+    字节 `bytes`（编码后 8 字节补零，解码拒绝非零填充），address 为小写
+    `"0x"+40 个十六进制字符`，数组为 `list`，元组为 `tuple`。
 - 已实现：嵌套值的路径化读取与定点替换。
   - `get_abi_value_at_path(abi_type, data, path)`：按路径只返回选中的子值。
   - `replace_abi_value_at_path(abi_type, data, path, value)`：返回替换后的
@@ -42,9 +45,10 @@ data 编解码、合约部署 constructor 参数编解码。
     签名，anonymous 事件返回 `None`。
   - `decode_event_log(event, topics, data)`：校验 topics 数量与 topic0，
     严格解码 data 为非 indexed 参数 tuple，按声明顺序与 indexed 值合并
-    返回一个 tuple。indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`
-    从 32 字节 topic 严格解码；indexed 的 `string`、动态 `bytes`、数组与
-    tuple 不可逆，原样返回该 32 字节 topic（口径 `bytes`）。
+    返回一个 tuple。indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`/
+    `fixedMxN`/`ufixedMxN`/`function` 从 32 字节 topic 严格解码；indexed
+    的 `string`、动态 `bytes`、数组与 tuple 不可逆，原样返回该 32 字节
+    topic（口径 `bytes`）。
   - `encode_event_log(event, values)`：按声明值编码日志，返回不可变
     `EncodedEventLog`（`event` / `topics`（bytes tuple）/ `data`，以及
     `topics_hex` / `data_hex` 属性）。`values` 按声明顺序接受 list 或
@@ -52,8 +56,9 @@ data 编解码、合约部署 constructor 参数编解码。
     时 `data` 为 `b""`；非匿名事件 topics 首项为签名 topic0 的 32 字节，
     匿名事件不放，再按声明顺序放 indexed 主题，数量口径与
     `decode_event_log` 一致。indexed 的 `address`/`bool`/`intM`/
-    `uintM`/`bytesM` 生成 32 字节 ABI 规范字（address 左补零、`bytesM`
-    右补零）；indexed 的 `string`、动态 `bytes`、数组与 tuple 取事件索引
+    `uintM`/`bytesM`/`fixedMxN`/`ufixedMxN`/`function` 生成 32 字节 ABI
+    规范字（address 左补零、`bytesM` 与 `function` 右补零）；indexed 的
+    `string`、动态 `bytes`、数组与 tuple 取事件索引
     特殊编码的 Keccak-256 主题——`string` 用 UTF-8 字节、动态 `bytes` 用
     内容、数组省略长度递归连接元素、tuple 递归连接成员，递归成员与整段
     结果补齐到 32 字节倍数，`string` 与动态 `bytes` 内容不补零。动态
@@ -62,9 +67,10 @@ data 编解码、合约部署 constructor 参数编解码。
   - `match_event_log_values(event, topics, data, values)`：在
     `decode_event_log` 校验通过的前提下核验候选值。`values` 按声明顺序
     接受 list 或 tuple，数量必须与参数数相等；非 indexed 候选与 data
-    解码值比较，indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`
-    候选与 topic 解码值比较，indexed 的 `string`、动态 `bytes`、数组与
-    tuple 候选按上述事件索引特殊编码重算 32 字节 Keccak-256 主题再与
+    解码值比较，indexed 的 `address`/`bool`/`intM`/`uintM`/`bytesM`/
+    `fixedMxN`/`ufixedMxN`/`function` 候选与 topic 解码值比较，indexed 的
+    `string`、动态 `bytes`、数组与 tuple 候选按上述事件索引特殊编码重算
+    32 字节 Keccak-256 主题再与
     日志 topic 比较。全部一致返回按声明顺序排列的值 tuple，任一值或
     哈希不同只返回 None（不抛错）。动态哈希主题不可逆，只比较哈希，
     不还原原值。

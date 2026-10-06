@@ -14,6 +14,8 @@
 值口径：
 - uintM/intM -> int，bool -> bool，string -> str；
 - bytes/bytesM -> bytes；
+- fixedMxN/ufixedMxN -> decimal.Decimal（解码结果小数位数恰为 N）；
+- function -> 24 字节 bytes（20 字节地址 + 4 字节 selector）；
 - address -> 小写 ``"0x" + 40 个十六进制字符``；
 - 数组 -> list，元组 -> tuple。
 
@@ -24,8 +26,18 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from ._exceptions import ABIValueError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    FUNCTION_BYTE_SIZE,
+    TupleType,
+)
 
 _WORD = 32
 
@@ -38,6 +50,8 @@ def _is_dynamic(abi_type: ABIType) -> bool:
         return abi_type.kind == "string" or (
             abi_type.kind == "bytes" and abi_type.byte_size is None
         )
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        return False
     if isinstance(abi_type, ArrayType):
         return abi_type.length is None or _is_dynamic(abi_type.element_type)
     if isinstance(abi_type, TupleType):
@@ -48,6 +62,8 @@ def _is_dynamic(abi_type: ABIType) -> bool:
 def _static_size(abi_type: ABIType) -> int:
     """静态类型作为一个整体占用的字节数（仅对非动态类型调用）。"""
     if isinstance(abi_type, ElementaryType):
+        return _WORD
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
         return _WORD
     if isinstance(abi_type, ArrayType):
         return abi_type.length * _static_size(abi_type.element_type)
@@ -82,6 +98,74 @@ def _address_bytes(value) -> bytes:
 def _len_prefixed(payload: bytes) -> bytes:
     padding = (-len(payload)) % _WORD
     return _uint_word(len(payload)) + payload + b"\x00" * padding
+
+
+def _fixed_scaled(t: FixedPointType, value: Decimal) -> int:
+    """把 Decimal 校验并缩放为整数 ``value * 10**N``。"""
+    if not isinstance(value, Decimal):
+        raise ABIValueError(
+            f"{'u' if not t.signed else ''}fixed{t.bit_size}x{t.scale} "
+            f"需要 decimal.Decimal，得到 {type(value).__name__}"
+        )
+    if not value.is_finite():
+        raise ABIValueError("fixed 值必须有限，不接受 NaN 或 Infinity")
+    # 有效小数位即 Decimal 指数的绝对值；Decimal('1.250') 为 3 位。
+    sign, digits, exponent = value.as_tuple()
+    fractional = max(0, -exponent)
+    if fractional > t.scale:
+        raise ABIValueError(
+            f"fixed{t.bit_size}x{t.scale} 至多接受 {t.scale} 位小数，"
+            f"得到 {fractional} 位：{value}"
+        )
+    # 直接由十进制数字与指数构造缩放整数 sign * digits * 10**(exponent+N)。
+    # 已保证 exponent+N >= 0，全程只用 Python 整数运算，不经过 Decimal
+    # 算术上下文，因而不会发生任何精度舍入。
+    coefficient = 0
+    for digit in digits:
+        coefficient = coefficient * 10 + digit
+    integer = coefficient * 10 ** (exponent + t.scale)
+    if sign:
+        integer = -integer
+    bits = t.bit_size
+    if t.signed:
+        low = -(1 << (bits - 1))
+        high = (1 << (bits - 1)) - 1
+        if not low <= integer <= high:
+            raise ABIValueError(
+                f"fixed{bits}x{t.scale} 超出补码范围 [{low}, {high}]：{value}"
+            )
+    else:
+        if not 0 <= integer < 1 << bits:
+            raise ABIValueError(
+                f"ufixed{bits}x{t.scale} 超出无符号范围 "
+                f"[0, {2**bits - 1}]：{value}"
+            )
+    return integer
+
+
+def _decode_fixed(t: FixedPointType, word: bytes) -> Decimal:
+    """从一个 32 字节字还原小数位数恰为 N 的 Decimal。"""
+    bits = t.bit_size
+    if t.signed:
+        integer = int.from_bytes(word, "big", signed=True)
+        low = -(1 << (bits - 1))
+        high = (1 << (bits - 1)) - 1
+        if not low <= integer <= high:
+            raise ABIValueError(
+                f"fixed{bits}x{t.scale} 解码值超出补码范围 "
+                f"[{low}, {high}]：{integer}"
+            )
+    else:
+        integer = int.from_bytes(word, "big", signed=False)
+        if integer >= 1 << bits:
+            raise ABIValueError(
+                f"ufixed{bits}x{t.scale} 解码值越界：{integer}"
+            )
+    # 直接按十进制数字与指数 -N 构造，严格保留 N 位小数（含尾随零），
+    # 避免除法对上下文精度的依赖。
+    absolute = abs(integer)
+    digit_tuple = tuple(int(ch) for ch in str(absolute))
+    return Decimal((1 if integer < 0 else 0, digit_tuple, -t.scale))
 
 
 def _encode_elementary(t: ElementaryType, value) -> bytes:
@@ -161,6 +245,19 @@ def _encode(abi_type: ABIType, value) -> bytes:
     """把值编码为一个自洽实体（动态类型即其 tail 实体）。"""
     if isinstance(abi_type, ElementaryType):
         return _encode_elementary(abi_type, value)
+    if isinstance(abi_type, FixedPointType):
+        integer = _fixed_scaled(abi_type, value)
+        return integer.to_bytes(_WORD, "big", signed=abi_type.signed)
+    if isinstance(abi_type, FunctionType):
+        if not isinstance(value, bytes):
+            raise ABIValueError(
+                f"function 需要 bytes，得到 {type(value).__name__}"
+            )
+        if len(value) != FUNCTION_BYTE_SIZE:
+            raise ABIValueError(
+                f"function 需要恰好 {FUNCTION_BYTE_SIZE} 字节，得到 {len(value)} 字节"
+            )
+        return value + b"\x00" * (_WORD - FUNCTION_BYTE_SIZE)
     if isinstance(abi_type, ArrayType):
         if not isinstance(value, list):
             raise ABIValueError(f"数组需要 list，得到 {type(value).__name__}")
@@ -288,6 +385,14 @@ def _decode(abi_type: ABIType, data: bytes, pos: int, bound: int):
     """从 ``pos`` 解码一个实体，返回 ``(值, 终点位置)``，不越过 bound。"""
     if isinstance(abi_type, ElementaryType):
         return _decode_elementary(abi_type, data, pos, bound)
+    if isinstance(abi_type, FixedPointType):
+        word = _read_word(data, pos, bound)
+        return _decode_fixed(abi_type, word), pos + _WORD
+    if isinstance(abi_type, FunctionType):
+        word = _read_word(data, pos, bound)
+        if word[FUNCTION_BYTE_SIZE:] != b"\x00" * (_WORD - FUNCTION_BYTE_SIZE):
+            raise ABIValueError("function 后 8 字节填充非零，编码不规范")
+        return word[:FUNCTION_BYTE_SIZE], pos + _WORD
     if isinstance(abi_type, ArrayType):
         element_type = abi_type.element_type
         if abi_type.length is None:

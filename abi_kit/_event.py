@@ -20,9 +20,9 @@
 - 非 indexed 参数由 data 按 tuple 严格 ABI 解码，值口径与
   :func:`decode_abi_value` 完全一致；没有非 indexed 参数时 data 必须
   为空。
-- indexed 的 address/bool/intM/uintM/bytesM 从各自 32 字节 topic 严格
-  解码；indexed 的 string、动态 bytes、数组与 tuple 不可逆，原样返回
-  32 字节 topic，口径为 bytes。
+- indexed 的 address/bool/intM/uintM/bytesM/fixedMxN/ufixedMxN/function
+  从各自 32 字节 topic 严格解码；indexed 的 string、动态 bytes、数组与
+  tuple 不可逆，原样返回 32 字节 topic，口径为 bytes。
 
 编码口径（encode_event_log）：
 
@@ -30,21 +30,21 @@
   生成 data；没有非 indexed 参数时 data 为空字节串。
 - 非匿名事件 topics 首项为签名 topic0 的 32 字节，匿名事件不放；其后按
   声明顺序放置 indexed 主题，topics 总数与解码口径一致。
-- indexed 的 address/bool/intM/uintM/bytesM 直接生成 32 字节 ABI 规范
-  字（address 左补零、bytesM 右补零，与解码补零方向一致）；indexed 的
-  string、动态 bytes、数组与 tuple 取事件索引特殊编码的 Keccak-256
-  主题——string 用 UTF-8 字节、动态 bytes 用内容、数组省略长度递归连接
-  元素、tuple 递归连接成员；基础值用 32 字节规范字（bytesM 右补零），
-  递归成员与整段结果右补齐到 32 字节倍数，string 与动态 bytes 内容不
-  补零。
+- indexed 的 address/bool/intM/uintM/bytesM/fixedMxN/ufixedMxN/function
+  直接生成 32 字节 ABI 规范字（address 左补零、bytesM 右补零，与解码补零
+  方向一致）；indexed 的 string、动态 bytes、数组与 tuple 取事件索引特殊
+  编码的 Keccak-256 主题——string 用 UTF-8 字节、动态 bytes 用内容、数组
+  省略长度递归连接元素、tuple 递归连接成员；基础值用 32 字节规范字
+  （bytesM 右补零），递归成员与整段结果右补齐到 32 字节倍数，string 与
+  动态 bytes 内容不补零。
 
 候选值核验口径（match_event_log_values）：
 
 - 先按 :func:`decode_event_log` 完成主题数量、topic0、topic 基础值与
   data 的全部严格校验，失败沿用其错误码；
 - values 按声明顺序接受 list 或 tuple，数量不符或非序列抛
-  EVENT_VALUE_INVALID；非 indexed 与可还原 indexed 基础值候选直接与
-  解码值比较；
+  EVENT_VALUE_INVALID；非 indexed 与可还原 indexed 基础值
+  （含 fixedMxN/ufixedMxN/function）候选直接与解码值比较；
 - indexed 的 string、动态 bytes、数组与 tuple 按上面的事件索引特殊编码
   重算 32 字节主题与日志 topic 比较，候选不能编码为其声明类型时抛
   EVENT_VALUE_INVALID；
@@ -58,12 +58,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ._codec import _encode, decode_abi_value
+from ._codec import _decode, _encode, decode_abi_value
 from ._exceptions import ABITypeError, ABIValueError, AbiEventError
 from ._format import format_abi_type
 from ._keccak import keccak_256
 from ._parser import parse_abi_type
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WORD = 32
 _HEX_DIGITS = set("0123456789abcdefABCDEF")
@@ -321,8 +328,16 @@ def _data_bytes(data) -> bytes:
 
 def _decode_indexed(abi_type: ABIType, topic: bytes):
     """从 32 字节 topic 严格解码可还原的 indexed 基础值。"""
-    if isinstance(abi_type, ArrayType) or isinstance(abi_type, TupleType):
+    if isinstance(abi_type, (ArrayType, TupleType)):
         return topic
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        # 固定小数与 function 均为可严格还原的静态单字基础类型，沿用值层
+        # 解码（含越界与 function 填充校验）。
+        try:
+            value, _end = _decode(abi_type, topic, 0, len(topic))
+        except ABIValueError as exc:
+            raise _error("EVENT_TOPIC_VALUE", str(exc)) from None
+        return value
     if not isinstance(abi_type, ElementaryType):
         return topic
     kind = abi_type.kind
@@ -472,6 +487,9 @@ def _indexed_preimage(abi_type: ABIType, value) -> bytes:
             return value
         # 静态基础类型（address/bool/intM/uintM/bytesM）的规范字。
         return _encode(abi_type, value)
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        # 固定小数与 function 同样是静态单字基础类型，取 ABI 规范字。
+        return _encode(abi_type, value)
     if isinstance(abi_type, ArrayType):
         if not isinstance(value, list):
             raise ABIValueError(f"数组需要 list，得到 {type(value).__name__}")
@@ -510,6 +528,9 @@ def _encode_indexed_topic(abi_type: ABIType, value) -> bytes:
             # address/bool/intM/uintM/bytesM 直接用 ABI 规范字，补零方向
             # 与 _decode_indexed 一致（address 左补零、bytesM 右补零）。
             return _encode(abi_type, value)
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        # fixedMxN/ufixedMxN/function 同为可还原的静态单字基础类型。
+        return _encode(abi_type, value)
     # string、动态 bytes、数组（含定长数组）与 tuple 取 Keccak-256 主题。
     return keccak_256(_indexed_preimage(abi_type, value))
 
@@ -519,7 +540,7 @@ def _is_hashed_indexed_type(abi_type: ABIType) -> bool:
 
     与 :func:`_encode_indexed_topic` 的分支保持一致：string、动态 bytes、
     数组（含定长数组）与 tuple 取哈希主题；address/bool/intM/uintM/bytesM
-    直接生成可还原的 32 字节规范字。
+    及 fixedMxN/ufixedMxN/function 直接生成可还原的 32 字节规范字。
     """
     if isinstance(abi_type, ElementaryType):
         return abi_type.kind == "string" or (
@@ -537,9 +558,9 @@ def encode_event_log(event: EventDefinition, values) -> EncodedEventLog:
     topic0 的 32 字节，匿名事件不放，其后按声明顺序放置 indexed 主题，
     数量口径与 :func:`decode_event_log` 一致。
 
-    indexed 的 address/bool/intM/uintM/bytesM 生成 32 字节 ABI 规范字；
-    indexed 的 string、动态 bytes、数组与 tuple 生成事件索引特殊编码的
-    Keccak-256 主题。相同输入始终得到相同结果。
+    indexed 的 address/bool/intM/uintM/bytesM/fixedMxN/ufixedMxN/function
+    生成 32 字节 ABI 规范字；indexed 的 string、动态 bytes、数组与 tuple
+    生成事件索引特殊编码的 Keccak-256 主题。相同输入始终得到相同结果。
 
     event 不是 :class:`EventDefinition`、values 不是 list/tuple、数量
     不符或任一值与其声明类型不匹配时，统一抛

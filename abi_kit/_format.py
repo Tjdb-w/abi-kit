@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from ._exceptions import ABITypeError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 
 def format_abi_type(abi_type: ABIType) -> str:
@@ -18,6 +25,11 @@ def format_abi_type(abi_type: ABIType) -> str:
         if abi_type.kind == "bytes" and abi_type.byte_size is not None:
             return f"bytes{abi_type.byte_size}"
         return abi_type.kind
+    if isinstance(abi_type, FixedPointType):
+        prefix = "fixed" if abi_type.signed else "ufixed"
+        return f"{prefix}{abi_type.bit_size}x{abi_type.scale}"
+    if isinstance(abi_type, FunctionType):
+        return "function"
     if isinstance(abi_type, ArrayType):
         suffix = "[]" if abi_type.length is None else f"[{abi_type.length}]"
         return format_abi_type(abi_type.element_type) + suffix

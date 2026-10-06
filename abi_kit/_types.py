@@ -1,7 +1,9 @@
 """不可变的 ABI 类型对象。
 
-类型对象分三种，可通过类区分：
+类型对象分五种，可通过类区分：
 - ElementaryType：基础类型（uintM/intM/address/bool/string/bytes/bytesM）
+- FixedPointType：固定小数类型（fixedMxN/ufixedMxN）
+- FunctionType：function 类型（24 字节地址+selector 组合，占据一个字）
 - ArrayType：数组类型（T[] 动态数组、T[n] 定长数组）
 - TupleType：元组类型（(T1,T2,...)，允许空元组）
 
@@ -24,6 +26,12 @@ _ADDRESS = "address"
 _BOOL = "bool"
 _STRING = "string"
 _BYTES = "bytes"
+
+#: fixed/ufixed 的缩放因子 10**N 上限所允许的最大小数位数 N。
+MAX_FIXED_SCALE = 80
+
+#: function 类型的字节宽度（20 字节地址 + 4 字节 selector）。
+FUNCTION_BYTE_SIZE = 24
 
 
 @dataclass(frozen=True)
@@ -77,6 +85,70 @@ class ElementaryType(ABIType):
                 raise ABITypeError(f"{kind} 类型不能带有字节宽度")
         else:
             raise ABITypeError(f"未知的基础类型：{kind!r}")
+
+    @property
+    def depth(self) -> int:
+        return 1
+
+
+@dataclass(frozen=True)
+class FixedPointType(ABIType):
+    """固定小数类型 ``fixedMxN`` / ``ufixedMxN``。
+
+    - ``signed``：``fixed`` 为 True（有符号补码），``ufixed`` 为 False
+      （无符号原码）；
+    - ``bit_size``：M，8..256 之间 8 的倍数；
+    - ``scale``：N，1..80 的小数位数；缩放整数为 ``value * 10**N``。
+    """
+
+    signed: bool
+    bit_size: int
+    scale: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.signed, bool):
+            raise ABITypeError(
+                f"fixed 符号标志必须是 bool，得到 {self.signed!r}"
+            )
+        if isinstance(self.bit_size, bool) or not isinstance(self.bit_size, int):
+            raise ABITypeError(f"fixed 类型必须给出整数位宽，得到 {self.bit_size!r}")
+        if not (8 <= self.bit_size <= 256 and self.bit_size % 8 == 0):
+            raise ABITypeError(
+                f"fixed 的位宽必须是 8 到 256 之间 8 的倍数，得到 {self.bit_size}"
+            )
+        if isinstance(self.scale, bool) or not isinstance(self.scale, int):
+            raise ABITypeError(f"fixed 小数位数必须是整数，得到 {self.scale!r}")
+        if not (1 <= self.scale <= MAX_FIXED_SCALE):
+            raise ABITypeError(
+                f"fixed 的小数位数 N 必须在 1 到 {MAX_FIXED_SCALE} 之间，"
+                f"得到 {self.scale}"
+            )
+
+    @property
+    def depth(self) -> int:
+        return 1
+
+
+@dataclass(frozen=True)
+class FunctionType(ABIType):
+    """function 基础类型：20 字节地址紧接 4 字节 selector，共 24 字节，
+    编码为前 24 字节保存内容、后 8 字节补零的一个 32 字节字。
+
+    ``byte_size`` 恒为 :data:`FUNCTION_BYTE_SIZE`（24）；构造时传入其他
+    宽度一律抛出 :class:`ABITypeError`。
+    """
+
+    byte_size: int = FUNCTION_BYTE_SIZE
+
+    def __post_init__(self) -> None:
+        if isinstance(self.byte_size, bool) or not isinstance(self.byte_size, int):
+            raise ABITypeError(
+                f"function 字节宽度必须是整数，得到 {self.byte_size!r}"
+            )
+        if self.byte_size != FUNCTION_BYTE_SIZE:
+            raise ABITypeError(
+                f"function 字节宽度必须为 {FUNCTION_BYTE_SIZE}，得到 {self.byte_size}"
+            )
 
     @property
     def depth(self) -> int:

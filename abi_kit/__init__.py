@@ -1,7 +1,9 @@
 """ABI Kit: Solidity ABI tooling.
 
 提供：
-- ABI 类型字符串的解析与规范格式化（parse_abi_type / format_abi_type）；
+- ABI 类型字符串的解析与规范格式化（parse_abi_type / format_abi_type），
+  覆盖 uintM/intM、fixedMxN/ufixedMxN、address、bool、string、bytes、
+  bytesM、function、数组与任意深度元组；
 - 值层完整编解码（encode_abi_value / decode_abi_value）；
 - 嵌套值的路径化读取、定点替换与多路径原子替换
   （get_abi_value_at_path / replace_abi_value_at_path /
@@ -146,7 +148,14 @@ from ._path import (
     replace_abi_value_at_path,
     replace_abi_values_at_paths,
 )
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 __all__ = [
     "ABITypeError",
@@ -171,6 +180,8 @@ __all__ = [
     "AbiContractAbiError",
     "ABIType",
     "ElementaryType",
+    "FixedPointType",
+    "FunctionType",
     "ArrayType",
     "TupleType",
     "parse_abi_type",

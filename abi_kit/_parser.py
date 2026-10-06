@@ -3,7 +3,8 @@
 语法（空白规则见下）::
 
     type       := elementary | tuple ，后接零个或多个数组后缀
-    elementary := uintM | intM | address | bool | string | bytes | bytesM
+    elementary := uintM | intM | fixedMxN | ufixedMxN | address | bool
+                 | string | bytes | bytesM | function
     tuple      := '(' [type (',' type)*] ')'
     suffix     := '[]' | '[' [1-9][0-9]* ']'
 
@@ -17,7 +18,14 @@
 from __future__ import annotations
 
 from ._exceptions import ABITypeError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WHITESPACE = " \t\n\r\f\v"
 
@@ -71,7 +79,7 @@ class _Parser:
             raise self._error("此处应为基础类型或元组")
         return self._parse_suffixes(head)
 
-    def _parse_elementary(self) -> ElementaryType:
+    def _parse_elementary(self) -> ABIType:
         text = self._text
         start = self._pos
         while self._pos < self._len:
@@ -83,13 +91,17 @@ class _Parser:
         word = text[start:self._pos]
         return self._classify(word)
 
-    def _classify(self, word: str) -> ElementaryType:
+    def _classify(self, word: str) -> ABIType:
         if word in ("address", "bool", "string"):
             return ElementaryType(word)
         if word == "bytes":
             return ElementaryType("bytes")
+        if word == "function":
+            return FunctionType()
         if word.startswith("bytes") and len(word) > len("bytes"):
             return self._sized_bytes(word)
+        if word.startswith(("ufixed", "fixed")):
+            return self._sized_fixed(word)
         if word.startswith("uint") or word.startswith("int"):
             return self._sized_integer(word)
         raise self._error(f"不是合法的基础类型：{word!r}")
@@ -101,6 +113,36 @@ class _Parser:
         if len(digits) > 1 and digits[0] == "0":
             raise self._error(f"类型宽度不允许前导零：{word!r}")
         return digits
+
+    def _sized_fixed(self, word: str) -> FixedPointType:
+        if word.startswith("ufixed"):
+            prefix, signed = "ufixed", False
+        else:
+            prefix, signed = "fixed", True
+        rest = word[len(prefix):]
+        parts = rest.split("x")
+        if (
+            len(parts) != 2
+            or not parts[0]
+            or not parts[1]
+            or not all(p.isascii() and p.isdigit() for p in parts)
+        ):
+            raise self._error(f"不是合法的基础类型：{word!r}")
+        m_digits, n_digits = parts
+        # M、N 均不允许前导零。
+        if (len(m_digits) > 1 and m_digits[0] == "0") or (
+            len(n_digits) > 1 and n_digits[0] == "0"
+        ):
+            raise self._error(f"类型宽度不允许前导零：{word!r}")
+        bit_size, scale = int(m_digits), int(n_digits)
+        try:
+            return FixedPointType(signed, bit_size, scale)
+        except ABITypeError:
+            # 规范化错误信息：重新抛出由本解析器生成的错误。
+            raise self._error(
+                f"{prefix} 的 M 必须是 8 到 256 之间 8 的倍数、N 必须在 1 到 80 "
+                f"之间，得到 {bit_size}x{scale}"
+            ) from None
 
     def _sized_integer(self, word: str) -> ElementaryType:
         if word.startswith("uint"):
