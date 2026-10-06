@@ -220,6 +220,27 @@ data 编解码、合约部署 constructor 参数编解码。
     `AbiTrailingDataError`；调用层任一步失败即整体抛出，不返回部分
     结果。`abi` 位置也可直接传入已解析的 `ContractCallRegistry`；现有
     函数、error、constructor 与事件日志入口的输入输出和异常不变。
+- 已实现：整份合约 ABI 的只读清单解析与校验。
+  - `parse_contract_abi(abi)`：一次解析 ABI JSON 字符串或等价条目数组，
+    沿用各现有入口的解析语义（function / event / error / constructor /
+    receive / fallback 六类条目全部解析，不跳过、不要求齐全），返回不可变
+    `ContractAbiDefinition`。`functions` / `events` / `errors` 为现有
+    `FunctionDefinition` / `EventDefinition` / `ErrorDefinition` 的有序
+    tuple；`constructor` 为 `ConstructorDefinition` 或 `None`；
+    `receive` / `fallback` 为是否已登记的布尔值（各至多一个，不接受非空
+    inputs）。
+  - `function_signatures` / `event_signatures` / `error_signatures`、
+    `function_selectors` / `error_selectors`、`event_topic0s` 均按声明顺序
+    给出；selector 为小写 `"0x"` + 8 位十六进制，非匿名事件 topic0 为小写
+    `"0x"` + 64 位十六进制；匿名事件没有签名 topic0，不进入
+    `event_topic0s`。
+  - 只做清单解析与校验：constructor / receive / fallback 重复或后两者
+    inputs 非空报错；同类 function / error / event 签名重复、同类
+    function / error 的 selector 相同报错；不同非匿名事件 topic0 相同报错；
+    function 与 error 的 selector 相同不冲突。空 ABI 时各集合为空、
+    constructor 为 `None`、receive/fallback 为 `False`；相同输入重复解析
+    稳定。只抛 `AbiContractAbiError`（见异常表），不改变其他入口的输入
+    输出和异常。
 
 ## 路径
 
@@ -354,6 +375,22 @@ data 编解码、合约部署 constructor 参数编解码。
   `ABIValueError`；参数按声明类型消费完后仍有尾随字节抛
   `AbiTrailingDataError`。调用层失败即整体抛出，不返回部分结果。现有
   函数、error、constructor 与事件日志入口的输入输出和异常不变。
+
+- 整份合约 ABI 只读清单（`parse_contract_abi`）的失败统一抛
+  `AbiContractAbiError`（独立的 `ValueError` 子类），通过 `code`
+  携带唯一错误码：
+
+  | 错误码 | 触发情形 |
+  | --- | --- |
+  | `ABI_ROOT_INVALID` | ABI 输入类型错误（不是 JSON 字符串/list/tuple）、JSON 无法解析，或 JSON 根非数组 |
+  | `ABI_ENTRY_INVALID` | 条目未知（非对象、缺 type、未知类型）、缺字段、名称或类型非法、参数不能形成 ABI 类型 |
+  | `ABI_ENTRY_DUPLICATE` | constructor / receive / fallback 重复，或 receive/fallback inputs 非空 |
+  | `ABI_SIGNATURE_COLLISION` | 同类 function/error/event 签名重复，或同类 function/error selector 相同 |
+  | `ABI_TOPIC0_COLLISION` | 两个不同非匿名事件 topic0 相同 |
+
+  function 与 error 的 selector 相同不冲突；匿名事件参与签名去重但没有
+  topic0，不参与 topic0 去重。本入口只做清单解析与校验，现有各入口的
+  输入输出和异常不变。
 
 ## 约定
 
