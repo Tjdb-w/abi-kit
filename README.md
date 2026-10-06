@@ -26,6 +26,12 @@ data 编解码、合约部署 constructor 参数编解码。
   - `get_abi_value_at_path(abi_type, data, path)`：按路径只返回选中的子值。
   - `replace_abi_value_at_path(abi_type, data, path, value)`：返回替换后的
     完整新编码；原始字节不被就地修改，动态偏移与长度随结果重算。
+  - `replace_abi_values_at_paths(abi_type, data, replacements)`：在同一份
+    原始编码上，按顺序给出多个 `(path, value)` 二元组，原子替换多个互不
+    重叠的子值（数组不同元素、tuple 不同字段及各自内部的动态 string、
+    bytes、数组与 tuple 子值），统一重算动态偏移、数组长度与内层布局；
+    空替换序列返回与输入内容相同的新 bytes；同一路径重复或两条路径互为
+    祖先与后代时整次操作拒绝（`PATH_CONFLICT`）。
   - 覆盖 tuple、动态/定长数组、嵌套数组以及 tuple 内继续嵌套数组。
 - 已实现：事件 ABI、签名 topic0 与日志还原校验。
   - `parse_event_abi(event_json)`：解析 ABI JSON 的 event 对象，返回不可变
@@ -230,6 +236,11 @@ data 编解码、合约部署 constructor 参数编解码。
 - 语法只接受上述字段名与数组索引；空段、空字段名、负数、带符号或带
   空格索引、多余分隔符均为非法。
 
+`replace_abi_values_at_paths` 的替换项为按顺序给出的 `(path, value)`
+二元 list/tuple 序列（如 `[("items[0].to", ADDR), ("ts", 3)]`）；所有替换
+基于同一份原始编码，路径之间互不重叠时才会执行，任何一项失败整次操作都
+不生效。
+
 `data` 接受 `bytes` 或可选 `0x` 前缀的偶数位十六进制 `str`；`abi_type`
 接受 `ABIType` 或上述类型字符串。
 
@@ -237,7 +248,7 @@ data 编解码、合约部署 constructor 参数编解码。
 
 - `ABITypeError`：类型层错误（既有语义不变）。
 - `ABIValueError`：值与类型不匹配、编码数据非法（既有语义不变）。
-- `AbiPathError`：路径层五类失败，统一通过异常的 `code` 属性携带唯一
+- `AbiPathError`：路径层七类失败，统一通过异常的 `code` 属性携带唯一
   错误码：
 
   | 错误码 | 触发情形 |
@@ -247,6 +258,8 @@ data 编解码、合约部署 constructor 参数编解码。
   | `PATH_NOT_FOUND` | tuple 中不存在该名称的字段 |
   | `PATH_TYPE_MISMATCH` | 对非容器值步进，或容器类型与步进方式不符 |
   | `PATH_VALUE_MISMATCH` | 替换值与路径所指的 ABI 类型不一致 |
+  | `PATH_REPLACEMENTS_INVALID` | 替换序列不是 list/tuple，或元素不是恰好含路径与新值的二元 list/tuple |
+  | `PATH_CONFLICT` | 同一路径出现两次，或两条路径互为祖先与后代（重叠写入） |
 
   成功时只返回数据，不返回部分数据或错误对象；原始编码非法仍抛
   `ABIValueError`。

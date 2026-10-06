@@ -17,6 +17,7 @@ from abi_kit import (
     get_abi_value_at_path,
     parse_abi_type,
     replace_abi_value_at_path,
+    replace_abi_values_at_paths,
 )
 from abi_kit._path import _NamedParser
 
@@ -457,6 +458,396 @@ class PathReplaceTests(unittest.TestCase):
         self.assertEqual(
             encode_abi_value(item_type, item),
             encode_abi_value(item_type, self.value[1][0]),
+        )
+
+
+class PathReplaceManyTests(unittest.TestCase):
+    def setUp(self):
+        self.t = named(OUTER_SRC)
+        self.value = outer_value()
+        self.data = encode_abi_value(self.t, self.value)
+
+    def _decode(self, data):
+        return decode_abi_value(self.t, data)
+
+    def test_empty_sequence_returns_equal_new_bytes(self):
+        new = replace_abi_values_at_paths(self.t, self.data, [])
+        self.assertIsInstance(new, bytes)
+        self.assertEqual(new, self.data)
+        self.assertIsNot(new, self.data)
+        # tuple 形式的空序列同样合法。
+        self.assertEqual(
+            replace_abi_values_at_paths(self.t, self.data, ()), self.data
+        )
+        # 十六进制输入同样得到规范编码。
+        self.assertEqual(
+            replace_abi_values_at_paths(self.t, "0x" + self.data.hex(), []),
+            self.data,
+        )
+
+    def test_replace_multiple_sibling_fields(self):
+        new = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [("sender", ADDR_C), ("ts", 1234), ("ok", False)],
+        )
+        decoded = self._decode(new)
+        self.assertEqual(decoded[0], ADDR_C)
+        self.assertEqual(decoded[2], 1234)
+        self.assertIs(decoded[4], False)
+        # 未选中的兄弟值保持不变。
+        self.assertEqual(decoded[1], self.value[1])
+        self.assertEqual(decoded[3], b"\xab" * 32)
+
+    def test_replace_different_array_elements_and_their_children(self):
+        new = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [
+                ("items[0].to", ADDR_A),
+                ("items[0].flag", False),
+                ("items[1].amounts[0]", 77),
+            ],
+        )
+        decoded = self._decode(new)
+        self.assertEqual(decoded[1][0], (ADDR_A, [1, 2, 3], False))
+        self.assertEqual(decoded[1][1], (ADDR_C, [77, 50], False))
+        # 外层兄弟字段不变。
+        self.assertEqual(decoded[2], 99)
+
+    def test_simultaneous_dynamic_siblings_grow_and_shrink(self):
+        new = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [
+                ("items[0].amounts", [1]),
+                ("items[1].amounts", [40, 50, 60, 70, 80]),
+            ],
+        )
+        decoded = self._decode(new)
+        self.assertEqual(decoded[1][0], (ADDR_B, [1], True))
+        self.assertEqual(decoded[1][1], (ADDR_C, [40, 50, 60, 70, 80], False))
+        self.assertEqual(decoded[0], ADDR_A)
+        self.assertEqual(decoded[2], 99)
+        self.assertEqual(decoded[3], b"\xab" * 32)
+        self.assertIs(decoded[4], True)
+
+    def test_dynamic_string_and_bytes_siblings(self):
+        t = named("(string a,bytes b,string c,uint256 n)")
+        data = encode_abi_value(
+            t, ("hello", b"\x01\x02", "world", 5)
+        )
+        new = replace_abi_values_at_paths(
+            t,
+            data,
+            [("a", "a much longer string"), ("b", b""), ("n", 42)],
+        )
+        self.assertEqual(
+            decode_abi_value(t, new),
+            ("a much longer string", b"", "world", 42),
+        )
+        new2 = replace_abi_values_at_paths(
+            t, data, [("a", ""), ("c", "x" * 100)]
+        )
+        self.assertEqual(
+            decode_abi_value(t, new2),
+            ("", b"\x01\x02", "x" * 100, 5),
+        )
+
+    def test_replace_whole_dynamic_subtrees_as_siblings(self):
+        t = named(
+            "((address to,uint256[] amounts)[] items,"
+            "(string note,bytes blob) meta,uint256 ts)"
+        )
+        value = (
+            [(ADDR_A, [1, 2]), (ADDR_B, [3])],
+            ("note", b"\xaa"),
+            7,
+        )
+        data = encode_abi_value(t, value)
+        new = replace_abi_values_at_paths(
+            t,
+            data,
+            [
+                ("items", [(ADDR_C, [9, 8, 7, 6])]),
+                ("meta", ("longer note", b"\xbb\xcc\xdd")),
+            ],
+        )
+        self.assertEqual(
+            decode_abi_value(t, new),
+            (
+                [(ADDR_C, [9, 8, 7, 6])],
+                ("longer note", b"\xbb\xcc\xdd"),
+                7,
+            ),
+        )
+
+    def test_replacements_container_and_pair_shapes_accepted(self):
+        # list[list]、tuple[tuple]、tuple[list] 均可。
+        expected = None
+        for shape in (
+            [["ts", 1], ["ok", False]],
+            (("ts", 1), ("ok", False)),
+            (["ts", 1], ("ok", False)),
+        ):
+            with self.subTest(shape=shape):
+                new = replace_abi_values_at_paths(self.t, self.data, shape)
+                decoded = self._decode(new)
+                self.assertEqual(decoded[2], 1)
+                self.assertIs(decoded[4], False)
+
+    def test_single_root_path_replaces_whole_value(self):
+        replacement = (
+            ADDR_C,
+            [(ADDR_A, [5], False)],
+            1,
+            b"\x00" * 32,
+            False,
+        )
+        new = replace_abi_values_at_paths(self.t, self.data, [("", replacement)])
+        self.assertEqual(new, encode_abi_value(self.t, replacement))
+
+    def test_disjoint_multi_replace_matches_chained_single_replaces(self):
+        first = replace_abi_value_at_path(self.t, self.data, "ts", 11)
+        second = replace_abi_value_at_path(self.t, first, "ok", False)
+        third = replace_abi_value_at_path(
+            self.t, second, "items[0].amounts[1]", 222
+        )
+        bulk = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [("ts", 11), ("ok", False), ("items[0].amounts[1]", 222)],
+        )
+        self.assertEqual(bulk, third)
+
+    def test_original_bytes_and_caller_value_views_not_mutated(self):
+        before = bytes(self.data)
+        items_view = self._decode(self.data)[1]
+        new = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [
+                ("items[0].amounts", [1]),
+                ("items[1].to", ADDR_A),
+                ("ts", 2),
+            ],
+        )
+        self.assertEqual(self.data, before)
+        self.assertEqual(self._decode(self.data), self.value)
+        self.assertEqual(items_view, self.value[1])
+        self.assertIsNot(new, self.data)
+
+    def test_equal_value_replacements_reproduce_exact_bytes(self):
+        new = replace_abi_values_at_paths(
+            self.t,
+            self.data,
+            [
+                ("ts", 99),
+                ("items[0].amounts", [1, 2, 3]),
+                ("sender", ADDR_A),
+            ],
+        )
+        self.assertEqual(new, self.data)
+
+    def test_hex_input_bytes_output(self):
+        new = replace_abi_values_at_paths(
+            self.t,
+            "0x" + self.data.hex(),
+            [("tag", b"\xcd" * 32)],
+        )
+        self.assertIsInstance(new, bytes)
+        self.assertEqual(get_abi_value_at_path(self.t, new, "tag"), b"\xcd" * 32)
+
+    def test_invalid_replacements_shape(self):
+        bad_sequences = [
+            None,
+            {("ts", 1)},
+            {"ts": 1},
+            iter([("ts", 1)]),
+            "ts",
+        ]
+        for replacements in bad_sequences:
+            with self.subTest(replacements=replacements):
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(self.t, self.data, replacements)
+                self.assertEqual(
+                    caught.exception.code, "PATH_REPLACEMENTS_INVALID"
+                )
+
+        bad_elements = [
+            [("ts", 1), "not-a-pair"],
+            [("ts",)],
+            [("ts", 1, 2)],
+            [42],
+            [b"ts"],
+            [("ts", 1), [1, 2, 3]],
+        ]
+        for replacements in bad_elements:
+            with self.subTest(replacements=replacements):
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(self.t, self.data, replacements)
+                self.assertEqual(
+                    caught.exception.code, "PATH_REPLACEMENTS_INVALID"
+                )
+
+    def test_shape_checked_before_encoding_and_navigation(self):
+        # 序列形状非法优先于一切：即便原始编码损坏、路径不存在也先报形状。
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t, b"\x00" * 3, [("nope", 1), 2]
+            )
+        self.assertEqual(caught.exception.code, "PATH_REPLACEMENTS_INVALID")
+
+    def test_duplicate_path_conflict(self):
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t, self.data, [("ts", 1), ("ts", 2)]
+            )
+        self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+
+    def test_same_target_via_field_name_and_position_conflicts(self):
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t, self.data, [("sender", ADDR_B), ("[0]", ADDR_C)]
+            )
+        self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+
+    def test_ancestor_descendant_conflicts(self):
+        cases = [
+            [("items", []), ("items[0].to", ADDR_A)],
+            [("items[0].amounts", [1]), ("items[0].amounts[0]", 2)],
+            # 祖先在后同样拒绝。
+            [("items[0].to", ADDR_A), ("items", [])],
+            [("items[0]", (ADDR_A, [1], True)), ("items[0].flag", False)],
+        ]
+        for replacements in cases:
+            with self.subTest(replacements=replacements):
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(
+                        self.t, self.data, replacements
+                    )
+                self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+
+    def test_root_path_conflicts_with_any_other(self):
+        root_replacement = self.value
+        for other in ("ts", "items[0]", "items[1].amounts[0]"):
+            with self.subTest(other=other):
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(
+                        self.t,
+                        self.data,
+                        [("", root_replacement), (other, 1)],
+                    )
+                self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(
+                        self.t,
+                        self.data,
+                        [(other, 1), ("", root_replacement)],
+                    )
+                self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+
+    def test_conflict_detected_before_value_validation_regardless_of_order(self):
+        # 后代的替换值类型错误，但冲突先于值校验、且与顺序无关。
+        bad_value = ("wrong", "tuple")
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t, self.data, [("items[0]", bad_value), ("items", [])]
+            )
+        self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t, self.data, [("items", []), ("items[0]", bad_value)]
+            )
+        self.assertEqual(caught.exception.code, "PATH_CONFLICT")
+
+    def test_conflict_rejects_whole_operation_atomically(self):
+        before = bytes(self.data)
+        with self.assertRaises(AbiPathError):
+            replace_abi_values_at_paths(
+                self.t,
+                self.data,
+                [("ts", 1), ("items", []), ("items[0].to", ADDR_A)],
+            )
+        # 原编码未受影响，也没有任何"部分应用"的产物。
+        self.assertEqual(self.data, before)
+        self.assertEqual(get_abi_value_at_path(self.t, self.data, "ts"), 99)
+
+    def test_path_errors_chain_from_existing_codes(self):
+        cases = [
+            ("nope", 1, "PATH_NOT_FOUND"),
+            ("items[9]", 1, "PATH_OUT_OF_RANGE"),
+            ("items[0].amounts[3]", 1, "PATH_OUT_OF_RANGE"),
+            ("ts[0]", 1, "PATH_TYPE_MISMATCH"),
+            ("items.who", ADDR_A, "PATH_TYPE_MISMATCH"),
+            ("items[", 1, "PATH_SYNTAX"),
+            ("ts", "not-an-int", "PATH_VALUE_MISMATCH"),
+            ("ok", 1, "PATH_VALUE_MISMATCH"),
+            ("sender", 123, "PATH_VALUE_MISMATCH"),
+            ("items[0].amounts", [1, "x"], "PATH_VALUE_MISMATCH"),
+        ]
+        for path, value, code in cases:
+            with self.subTest(path=path, code=code):
+                with self.assertRaises(AbiPathError) as caught:
+                    replace_abi_values_at_paths(
+                        self.t, self.data,
+                        [("tag", b"\xab" * 32), (path, value)],
+                    )
+                self.assertEqual(caught.exception.code, code)
+
+    def test_navigation_error_precedes_later_value_check(self):
+        # 后面的替换值即使类型正确，前面路径走不通仍按导航错误拒绝。
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(
+                self.t,
+                self.data,
+                [("items[9]", 1), ("ts", "bad")],
+            )
+        self.assertEqual(caught.exception.code, "PATH_OUT_OF_RANGE")
+
+    def test_non_string_path_is_path_syntax(self):
+        with self.assertRaises(AbiPathError) as caught:
+            replace_abi_values_at_paths(self.t, self.data, [(0, 1)])
+        self.assertEqual(caught.exception.code, "PATH_SYNTAX")
+
+    def test_malformed_encoding_still_raises_value_error(self):
+        with self.assertRaises(ABIValueError):
+            replace_abi_values_at_paths(self.t, b"\x00" * 10, [])
+        with self.assertRaises(ABIValueError):
+            replace_abi_values_at_paths(
+                self.t, b"\x00" * 10, [("ts", 1)]
+            )
+        with self.assertRaises(ABIValueError):
+            replace_abi_values_at_paths(self.t, "not-hex", [])
+
+    def test_deeply_nested_sibling_replacements(self):
+        t = parse_abi_type("uint256[][2]")
+        data = encode_abi_value(t, [[1, 2, 3], [4, 5, 6]])
+        new = replace_abi_values_at_paths(
+            t,
+            data,
+            [("[0][0]", 10), ("[0][2]", 30), ("[1][1]", 50)],
+        )
+        self.assertEqual(
+            decode_abi_value(t, new), [[10, 2, 30], [4, 50, 6]]
+        )
+
+        t2 = named("((uint256 amount,address who)[] logs,uint256 block)")
+        data2 = encode_abi_value(
+            t2, ([(1, ADDR_A), (2, ADDR_B), (3, ADDR_C)], 55)
+        )
+        new2 = replace_abi_values_at_paths(
+            t2,
+            data2,
+            [
+                ("logs[0].who", ADDR_C),
+                ("logs[2].amount", 33),
+                ("block", 56),
+            ],
+        )
+        self.assertEqual(
+            decode_abi_value(t2, new2),
+            ([(1, ADDR_C), (2, ADDR_B), (33, ADDR_C)], 56),
         )
 
 

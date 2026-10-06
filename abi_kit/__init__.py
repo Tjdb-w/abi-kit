@@ -3,8 +3,9 @@
 提供：
 - ABI 类型字符串的解析与规范格式化（parse_abi_type / format_abi_type）；
 - 值层完整编解码（encode_abi_value / decode_abi_value）；
-- 嵌套值的路径化读取与定点替换
-  （get_abi_value_at_path / replace_abi_value_at_path）；
+- 嵌套值的路径化读取、定点替换与多路径原子替换
+  （get_abi_value_at_path / replace_abi_value_at_path /
+  replace_abi_values_at_paths）；
 - 事件 ABI 解析、签名 topic0、日志还原校验、日志编码与候选值核验
   （parse_event_abi / event_topic0 / decode_event_log /
   encode_event_log / match_event_log_values）；
@@ -28,7 +29,7 @@
   decode_contract_call）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
-AbiValueError），路径层五类失败抛出带错误码的 AbiPathError，事件层
+AbiValueError），路径层七类失败抛出带错误码的 AbiPathError，事件层
 六类失败抛出带错误码的 AbiEventError；合约级事件注册表构建与日志
 分派失败抛出带错误码的 AbiLogDispatchError；函数调用路径的元数据、
 查找、selector、calldata 长度与尾随数据错误分别抛出 AbiMetadataError、
@@ -134,7 +135,11 @@ from ._function import (
     parse_function_abi,
 )
 from ._parser import parse_abi_type
-from ._path import get_abi_value_at_path, replace_abi_value_at_path
+from ._path import (
+    get_abi_value_at_path,
+    replace_abi_value_at_path,
+    replace_abi_values_at_paths,
+)
 from ._types import ABIType, ArrayType, ElementaryType, TupleType
 
 __all__ = [
@@ -167,6 +172,7 @@ __all__ = [
     "decode_abi_value",
     "get_abi_value_at_path",
     "replace_abi_value_at_path",
+    "replace_abi_values_at_paths",
     "EventDefinition",
     "parse_event_abi",
     "event_topic0",
