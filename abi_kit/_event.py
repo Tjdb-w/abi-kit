@@ -58,12 +58,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from ._codec import _encode, decode_abi_value
+from ._codec import _decode, _encode, decode_abi_value
 from ._exceptions import ABITypeError, ABIValueError, AbiEventError
 from ._format import format_abi_type
 from ._keccak import keccak_256
 from ._parser import parse_abi_type
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WORD = 32
 _HEX_DIGITS = set("0123456789abcdefABCDEF")
@@ -323,6 +330,13 @@ def _decode_indexed(abi_type: ABIType, topic: bytes):
     """从 32 字节 topic 严格解码可还原的 indexed 基础值。"""
     if isinstance(abi_type, ArrayType) or isinstance(abi_type, TupleType):
         return topic
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        # 静态单字类型：topic 即其 ABI 规范字，按值层同一规则严格解码。
+        try:
+            value, _end = _decode(abi_type, topic, 0, _WORD)
+        except ABIValueError as exc:
+            raise _error("EVENT_TOPIC_VALUE", str(exc)) from None
+        return value
     if not isinstance(abi_type, ElementaryType):
         return topic
     kind = abi_type.kind
@@ -510,6 +524,9 @@ def _encode_indexed_topic(abi_type: ABIType, value) -> bytes:
             # address/bool/intM/uintM/bytesM 直接用 ABI 规范字，补零方向
             # 与 _decode_indexed 一致（address 左补零、bytesM 右补零）。
             return _encode(abi_type, value)
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        # 静态单字类型，同样直接生成 32 字节 ABI 规范字。
+        return _encode(abi_type, value)
     # string、动态 bytes、数组（含定长数组）与 tuple 取 Keccak-256 主题。
     return keccak_256(_indexed_preimage(abi_type, value))
 

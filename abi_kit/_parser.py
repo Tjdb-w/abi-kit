@@ -4,6 +4,7 @@
 
     type       := elementary | tuple ，后接零个或多个数组后缀
     elementary := uintM | intM | address | bool | string | bytes | bytesM
+                | fixedMxN | ufixedMxN | function
     tuple      := '(' [type (',' type)*] ')'
     suffix     := '[]' | '[' [1-9][0-9]* ']'
 
@@ -17,7 +18,14 @@
 from __future__ import annotations
 
 from ._exceptions import ABITypeError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WHITESPACE = " \t\n\r\f\v"
 
@@ -25,6 +33,37 @@ _WHITESPACE = " \t\n\r\f\v"
 #: 检查；此阈值仅用于在触及 Python 递归限制（实测约 500 层括号）前抛出
 #: ABITypeError，远低于递归上限且高于任何合法输入。
 _RECURSION_SAFETY_LIMIT = 200
+
+
+def _fixed_point_parts(word: str):
+    """解析 fixedMxN / ufixedMxN 词素。
+
+    word 不属于固定小数词素时返回 ``None``；合法时返回
+    ``(signed, m, n)``；属于但拼写、前导零或范围非法时返回错误描述
+    字符串，由调用方包装为自己的解析错误。
+    """
+    if word.startswith("ufixed"):
+        prefix, signed = "ufixed", False
+    elif word.startswith("fixed"):
+        prefix, signed = "fixed", True
+    else:
+        return None
+    rest = word[len(prefix):]
+    parts = rest.split("x")
+    if len(parts) != 2:
+        return f"不是合法的固定小数类型：{word!r}"
+    m_digits, n_digits = parts
+    for digits in (m_digits, n_digits):
+        if not digits or not digits.isascii() or not digits.isdigit():
+            return f"不是合法的固定小数类型：{word!r}"
+        if len(digits) > 1 and digits[0] == "0":
+            return f"类型宽度不允许前导零：{word!r}"
+    m, n = int(m_digits), int(n_digits)
+    if not (8 <= m <= 256 and m % 8 == 0):
+        return f"固定小数的 M 必须是 8 到 256 之间 8 的倍数，得到 {m_digits}"
+    if not (1 <= n <= 80):
+        return f"固定小数的 N 必须在 1 到 80 之间，得到 {n_digits}"
+    return (signed, m, n)
 
 
 class _Parser:
@@ -71,7 +110,7 @@ class _Parser:
             raise self._error("此处应为基础类型或元组")
         return self._parse_suffixes(head)
 
-    def _parse_elementary(self) -> ElementaryType:
+    def _parse_elementary(self) -> ABIType:
         text = self._text
         start = self._pos
         while self._pos < self._len:
@@ -83,13 +122,21 @@ class _Parser:
         word = text[start:self._pos]
         return self._classify(word)
 
-    def _classify(self, word: str) -> ElementaryType:
+    def _classify(self, word: str) -> ABIType:
         if word in ("address", "bool", "string"):
             return ElementaryType(word)
         if word == "bytes":
             return ElementaryType("bytes")
         if word.startswith("bytes") and len(word) > len("bytes"):
             return self._sized_bytes(word)
+        if word == "function":
+            return FunctionType()
+        fixed = _fixed_point_parts(word)
+        if fixed is not None:
+            if isinstance(fixed, str):
+                raise self._error(fixed)
+            signed, m, n = fixed
+            return FixedPointType(signed, m, n)
         if word.startswith("uint") or word.startswith("int"):
             return self._sized_integer(word)
         raise self._error(f"不是合法的基础类型：{word!r}")

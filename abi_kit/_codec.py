@@ -15,6 +15,8 @@
 - uintM/intM -> int，bool -> bool，string -> str；
 - bytes/bytesM -> bytes；
 - address -> 小写 ``"0x" + 40 个十六进制字符``；
+- fixedMxN/ufixedMxN -> decimal.Decimal（小数位数恰为 N）；
+- function -> 恰好 24 字节的 bytes；
 - 数组 -> list，元组 -> tuple。
 
 所有值不匹配、非法编码与不适用的类型对象统一抛出
@@ -24,8 +26,17 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from ._exceptions import ABIValueError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WORD = 32
 
@@ -38,6 +49,8 @@ def _is_dynamic(abi_type: ABIType) -> bool:
         return abi_type.kind == "string" or (
             abi_type.kind == "bytes" and abi_type.byte_size is None
         )
+    if isinstance(abi_type, (FixedPointType, FunctionType)):
+        return False
     if isinstance(abi_type, ArrayType):
         return abi_type.length is None or _is_dynamic(abi_type.element_type)
     if isinstance(abi_type, TupleType):
@@ -47,7 +60,7 @@ def _is_dynamic(abi_type: ABIType) -> bool:
 
 def _static_size(abi_type: ABIType) -> int:
     """静态类型作为一个整体占用的字节数（仅对非动态类型调用）。"""
-    if isinstance(abi_type, ElementaryType):
+    if isinstance(abi_type, (ElementaryType, FixedPointType, FunctionType)):
         return _WORD
     if isinstance(abi_type, ArrayType):
         return abi_type.length * _static_size(abi_type.element_type)
@@ -133,6 +146,74 @@ def _encode_elementary(t: ElementaryType, value) -> bytes:
     return value + b"\x00" * (_WORD - t.byte_size)
 
 
+def _fixed_label(t: FixedPointType) -> str:
+    prefix = "fixed" if t.signed else "ufixed"
+    return f"{prefix}{t.bit_size}x{t.scale}"
+
+
+def _fixed_range(t: FixedPointType) -> tuple[int, int]:
+    """缩放整数（值 × 10^N）的合法闭区间。"""
+    if t.signed:
+        return -(1 << (t.bit_size - 1)), (1 << (t.bit_size - 1)) - 1
+    return 0, (1 << t.bit_size) - 1
+
+
+def _encode_fixed_point(t: FixedPointType, value) -> bytes:
+    label = _fixed_label(t)
+    if not isinstance(value, Decimal):
+        raise ABIValueError(
+            f"{label} 需要 decimal.Decimal，得到 {type(value).__name__}"
+        )
+    if not value.is_finite():
+        raise ABIValueError(f"{label} 需要有限小数，得到 {value}")
+    low, high = _fixed_range(t)
+    # 用 as_tuple 精确计算缩放整数 value × 10^N，不经过 decimal 上下文，
+    # 避免默认精度对有效数字的舍入。
+    sign, digits, exponent = value.as_tuple()
+    coeff = 0
+    for digit in digits:
+        coeff = coeff * 10 + digit
+    shift = exponent + t.scale
+    if coeff == 0:
+        scaled = 0
+    elif shift >= 0:
+        # 2^256 < 10^78：有效数字位数与正指数一旦放大到 78 位十进制，
+        # 缩放整数必然越界，先拦截以避免构造天文数字。
+        if len(digits) - 1 + shift >= 78:
+            raise ABIValueError(
+                f"{label} 缩放整数超出范围 [{low}, {high}]：{value}"
+            )
+        scaled = coeff * 10 ** shift
+    else:
+        if -shift >= len(digits):
+            # 除数已大于系数本身，缩放后必非整数。
+            raise ABIValueError(
+                f"{label} 的有效小数位不能超过 {t.scale}：{value}"
+            )
+        scaled, remainder = divmod(coeff, 10 ** (-shift))
+        if remainder:
+            raise ABIValueError(
+                f"{label} 的有效小数位不能超过 {t.scale}：{value}"
+            )
+    if sign:
+        scaled = -scaled
+    if not low <= scaled <= high:
+        raise ABIValueError(
+            f"{label} 缩放整数超出范围 [{low}, {high}]：{value}"
+        )
+    return scaled.to_bytes(_WORD, "big", signed=t.signed)
+
+
+def _encode_function_value(t: FunctionType, value) -> bytes:
+    if not isinstance(value, bytes):
+        raise ABIValueError(f"function 需要 bytes，得到 {type(value).__name__}")
+    if len(value) != t.byte_size:
+        raise ABIValueError(
+            f"function 需要恰好 {t.byte_size} 字节，得到 {len(value)} 字节"
+        )
+    return value + b"\x00" * (_WORD - t.byte_size)
+
+
 def _encode_block(member_types: list[ABIType], values: list) -> bytes:
     """编码一个 head/tail 块（元组成员或一组同构数组元素）。
 
@@ -161,6 +242,10 @@ def _encode(abi_type: ABIType, value) -> bytes:
     """把值编码为一个自洽实体（动态类型即其 tail 实体）。"""
     if isinstance(abi_type, ElementaryType):
         return _encode_elementary(abi_type, value)
+    if isinstance(abi_type, FixedPointType):
+        return _encode_fixed_point(abi_type, value)
+    if isinstance(abi_type, FunctionType):
+        return _encode_function_value(abi_type, value)
     if isinstance(abi_type, ArrayType):
         if not isinstance(value, list):
             raise ABIValueError(f"数组需要 list，得到 {type(value).__name__}")
@@ -247,6 +332,32 @@ def _decode_elementary(t: ElementaryType, data: bytes, pos: int, bound: int):
     return word[:t.byte_size], end
 
 
+def _decode_fixed_point(t: FixedPointType, data: bytes, pos: int, bound: int):
+    """解码固定小数实体，返回 ``(Decimal 值, 终点位置)``。"""
+    word = _read_word(data, pos, bound)
+    end = pos + _WORD
+    scaled = int.from_bytes(word, "big", signed=t.signed)
+    low, high = _fixed_range(t)
+    if not low <= scaled <= high:
+        raise ABIValueError(
+            f"{_fixed_label(t)} 解码缩放整数超出范围 [{low}, {high}]：{scaled}"
+        )
+    # 直接按 (符号, 系数数字, 指数 -N) 构造 Decimal，小数位数恰为 N，
+    # 不经过 decimal 上下文，任何位宽都不会被舍入。
+    digits = tuple(int(c) for c in str(abs(scaled)))
+    value = Decimal((1 if scaled < 0 else 0, digits, -t.scale))
+    return value, end
+
+
+def _decode_function_value(t: FunctionType, data: bytes, pos: int, bound: int):
+    """解码 function 实体，返回 ``(24 字节值, 终点位置)``。"""
+    word = _read_word(data, pos, bound)
+    end = pos + _WORD
+    if word[t.byte_size:] != b"\x00" * (_WORD - t.byte_size):
+        raise ABIValueError("function 尾部填充非零，编码不规范")
+    return word[:t.byte_size], end
+
+
 def _decode_block(
     member_types: list[ABIType], data: bytes, base: int, bound: int
 ):
@@ -288,6 +399,10 @@ def _decode(abi_type: ABIType, data: bytes, pos: int, bound: int):
     """从 ``pos`` 解码一个实体，返回 ``(值, 终点位置)``，不越过 bound。"""
     if isinstance(abi_type, ElementaryType):
         return _decode_elementary(abi_type, data, pos, bound)
+    if isinstance(abi_type, FixedPointType):
+        return _decode_fixed_point(abi_type, data, pos, bound)
+    if isinstance(abi_type, FunctionType):
+        return _decode_function_value(abi_type, data, pos, bound)
     if isinstance(abi_type, ArrayType):
         element_type = abi_type.element_type
         if abi_type.length is None:

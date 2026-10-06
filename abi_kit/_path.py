@@ -45,7 +45,15 @@ from __future__ import annotations
 
 from ._codec import _encode, decode_abi_value
 from ._exceptions import ABITypeError, ABIValueError, AbiPathError
-from ._types import ABIType, ArrayType, ElementaryType, TupleType
+from ._parser import _fixed_point_parts
+from ._types import (
+    ABIType,
+    ArrayType,
+    ElementaryType,
+    FixedPointType,
+    FunctionType,
+    TupleType,
+)
 
 _WHITESPACE = " \t\n\r\f\v"
 _NAME_START = set(
@@ -115,7 +123,7 @@ class _NamedParser:
             raise self._error("此处应为基础类型或元组")
         return self._parse_suffixes(head)
 
-    def _parse_elementary(self) -> ElementaryType:
+    def _parse_elementary(self) -> ABIType:
         text = self._text
         start = self._pos
         while self._pos < self._len:
@@ -135,6 +143,14 @@ class _NamedParser:
                 raise self._error(
                     f"bytesM 的 M 必须在 1 到 32 之间，得到 {digits}"
                 ) from None
+        if word == "function":
+            return FunctionType()
+        fixed = _fixed_point_parts(word)
+        if fixed is not None:
+            if isinstance(fixed, str):
+                raise self._error(fixed)
+            signed, m, n = fixed
+            return FixedPointType(signed, m, n)
         if word.startswith("uint") or word.startswith("int"):
             kind = "uint" if word.startswith("uint") else "int"
             prefix = kind

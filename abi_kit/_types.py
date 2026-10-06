@@ -1,7 +1,9 @@
 """不可变的 ABI 类型对象。
 
-类型对象分三种，可通过类区分：
+类型对象分五种，可通过类区分：
 - ElementaryType：基础类型（uintM/intM/address/bool/string/bytes/bytesM）
+- FixedPointType：固定小数类型（fixedMxN/ufixedMxN）
+- FunctionType：函数类型（function，固定 24 字节）
 - ArrayType：数组类型（T[] 动态数组、T[n] 定长数组）
 - TupleType：元组类型（(T1,T2,...)，允许空元组）
 
@@ -77,6 +79,68 @@ class ElementaryType(ABIType):
                 raise ABITypeError(f"{kind} 类型不能带有字节宽度")
         else:
             raise ABITypeError(f"未知的基础类型：{kind!r}")
+
+    @property
+    def depth(self) -> int:
+        return 1
+
+
+@dataclass(frozen=True)
+class FixedPointType(ABIType):
+    """固定小数类型 fixedMxN / ufixedMxN。
+
+    signed 为 True 表示 fixedMxN（有符号），False 表示 ufixedMxN（无符号）；
+    bit_size 为 M（8..256 的 8 的倍数），scale 为 N（1..80 的小数位数）。
+    与基础类型同为静态单字类型，层数计 1。
+    """
+
+    signed: bool
+    bit_size: int
+    scale: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.signed, bool):
+            raise ABITypeError(
+                f"固定小数类型的 signed 必须是 bool，得到 {self.signed!r}"
+            )
+        label = "fixed" if self.signed else "ufixed"
+        if isinstance(self.bit_size, bool) or not isinstance(self.bit_size, int):
+            raise ABITypeError(f"{label} 类型必须给出整数位宽")
+        if not (8 <= self.bit_size <= 256 and self.bit_size % 8 == 0):
+            raise ABITypeError(
+                f"{label} 的位宽 M 必须是 8 到 256 之间 8 的倍数，"
+                f"得到 {self.bit_size}"
+            )
+        if isinstance(self.scale, bool) or not isinstance(self.scale, int):
+            raise ABITypeError(f"{label} 类型必须给出整数小数位数")
+        if not (1 <= self.scale <= 80):
+            raise ABITypeError(
+                f"{label} 的小数位数 N 必须在 1 到 80 之间，得到 {self.scale}"
+            )
+
+    @property
+    def depth(self) -> int:
+        return 1
+
+
+@dataclass(frozen=True)
+class FunctionType(ABIType):
+    """函数指针类型 function，固定 24 字节（地址 + selector）。
+
+    与基础类型同为静态单字类型，层数计 1。
+    """
+
+    byte_size: int = 24
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.byte_size, bool)
+            or not isinstance(self.byte_size, int)
+            or self.byte_size != 24
+        ):
+            raise ABITypeError(
+                f"function 类型的字节宽度必须为 24，得到 {self.byte_size!r}"
+            )
 
     @property
     def depth(self) -> int:
