@@ -31,6 +31,10 @@
   decode_contract_call）。
 - 整份合约 ABI 的只读清单解析与校验
   （parse_contract_abi / ContractAbiDefinition）。
+- ABI 类型布局的编码前预检与结构说明
+  （describeAbiType）：只返回诊断字典，不编解码、不读写文件；结构错误
+  抛内建 TypeError，类型语法/位宽/长度/components 非法抛包导出的
+  RangeError。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层七类失败抛出带错误码的 AbiPathError，事件层
@@ -72,6 +76,7 @@ from ._contract import (
     parse_event_registry,
 )
 from ._contract_abi import ContractAbiDefinition, parse_contract_abi
+from ._describe import describeAbiType
 from ._contract_call import (
     ContractCallRegistry,
     DecodedContractCall,
@@ -120,6 +125,7 @@ from ._exceptions import (
     AbiValueError,
     ABITypeError,
     ABIValueError,
+    RangeError,
 )
 from ._format import format_abi_type
 from ._function import (
@@ -160,6 +166,7 @@ from ._types import (
 __all__ = [
     "ABITypeError",
     "ABIValueError",
+    "RangeError",
     "AbiValueError",
     "AbiPathError",
     "AbiEventError",
@@ -246,4 +253,5 @@ __all__ = [
     "decode_contract_call",
     "ContractAbiDefinition",
     "parse_contract_abi",
+    "describeAbiType",
 ]

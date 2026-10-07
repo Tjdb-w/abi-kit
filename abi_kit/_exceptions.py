@@ -1,6 +1,9 @@
 """异常类型。
 
 - ABITypeError：无效的 ABI 类型字符串或类型对象（类型层）。
+- RangeError：编码前类型布局预检（describeAbiType）中类型声明的值域
+  非法（语法、位宽、bytesM、fixedMxN、数组长度、非 tuple 带
+  components 等）；结构错误使用内建 TypeError。
 - ABIValueError：值与类型不匹配、编码数据非法或类型对象不适用于值层
   操作（值层）；函数调用实参不能按声明类型编码或解码时同样抛出。
 - AbiPathError：路径语法非法或按路径读取/定点替换失败（路径层）。
@@ -35,6 +38,16 @@
 
 class ABITypeError(ValueError):
     """无效的 ABI 类型字符串或类型对象。"""
+
+
+class RangeError(ValueError):
+    """类型声明的值域非法：类型语法、整数位宽、bytesM、fixedMxN、数组
+    长度或 tuple 数组后缀非法，或非 tuple 类型带有 ``components``。
+
+    供编码前预检入口 :func:`abi_kit.describeAbiType` 使用；名称对齐
+    describeAbiType 规格中的值域错误，与结构错误使用的内建
+    :class:`TypeError` 配对。消息只指出输入层级与字段，不含文件路径。
+    """
 
 
 class ABIValueError(ValueError):

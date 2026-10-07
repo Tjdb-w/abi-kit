@@ -253,6 +253,39 @@ data 编解码、合约部署 constructor 参数编解码。
     constructor 为 `None`、receive/fallback 为 `False`；相同输入重复解析
     稳定。只抛 `AbiContractAbiError`（见异常表），不改变其他入口的输入
     输出和异常。
+- 已实现：ABI 类型布局的编码前预检与结构说明。
+  - `describeAbiType(abi_type_json)`：输入单个 ABI JSON 类型对象
+    （`type` 为类型文本，`tuple` / `tuple[...]` 可带 `components`），
+    只返回诊断字典，不编解码、不读写文件。返回字典只含
+    `canonical` / `kind` / `isDynamic` / `arrayLength` / `base` /
+    `components` 六个键并递归展开：
+    - `canonical` 为无空白、无名称、可用于签名的规范类型串，如
+      `uint256`、`bytes32`、`address[]`、`(bytes32,uint256)[2]`，
+      别名沿用解析层归一（`uint`→`uint256`、`int`→`int256`、
+      `byte`→`bytes1`、`fixed`→`fixed128x18`、`ufixed`→`ufixed128x18`）；
+    - `kind` 取 `uint` / `int` / `address` / `bool` / `bytesN` /
+      `bytes` / `string` / `fixed` / `ufixed` / `function` / `array` /
+      `tuple`；
+    - `isDynamic` 按 Solidity ABI 规则判断：`bytes`、`string`、动态数组、
+      元素动态的数组、含动态成员的 tuple 为 `true`，其余（含空 tuple）
+      为 `false`；
+    - 数组的 `base` 为元素诊断并保留完整递归链，其余类型 `base` 为
+      `null`；定长数组 `arrayLength` 为正整数，动态数组与非数组为
+      `null`；
+    - tuple 的 `components` 按声明顺序保存子诊断，空 tuple 为 `[]`，
+      叶子类型为 `null`；数组链指向 tuple 时（如 `(T,U)[2][]`），每层
+      数组的 `components` 都透传最内层 tuple 的子诊断，否则为 `null`。
+  - 参数名与成员名（`name`）不参与诊断、不进入结果；相同输入稳定得到
+    相同输出。
+  - 输入非字典、`type` 非字符串、tuple 缺 `components` 或
+    `components` 非数组时抛内建 `TypeError`；类型语法、整数位宽、
+    bytesM、fixedMxN、数组长度非法，tuple 数组后缀非法，嵌套超过 128
+    层，或非 tuple
+    类型带 `components` 时抛包导出的 `RangeError`（`ValueError` 子类）。
+    异常消息指出输入层级与
+    字段（如 `components[0].components[2].type`）且不含文件路径，相同
+    输入得到同一异常。本功能只增加预检与结构说明，不改变既有编码字节、
+    日志结果与其他任何入口的行为。
 
 ## 路径
 
@@ -403,6 +436,19 @@ data 编解码、合约部署 constructor 参数编解码。
   function 与 error 的 selector 相同不冲突；匿名事件参与签名去重但没有
   topic0，不参与 topic0 去重。本入口只做清单解析与校验，现有各入口的
   输入输出和异常不变。
+
+- `describeAbiType` 的失败使用内建 `TypeError` 与包导出的
+  `RangeError`（`ValueError` 子类；不使用错误码）：
+
+  | 异常 | 触发情形 |
+  | --- | --- |
+  | `TypeError` | 输入非字典、`type` 非字符串、tuple 缺 `components` 或 `components` 非数组 |
+  | `RangeError` | 类型语法、整数位宽、bytesM、fixedMxN、数组长度或 tuple 数组后缀非法，非 tuple 类型带 `components`，或类型嵌套超过 128 层 |
+
+  异常消息指出输入层级与字段（根为 `输入`，嵌套节点形如
+  `components[0].components[2].type`）且不含文件路径；相同输入得到同一
+  异常。该入口只做预检与结构说明，不编解码、不读写文件，不改变既有编码
+  字节与日志结果。
 
 ## 约定
 
