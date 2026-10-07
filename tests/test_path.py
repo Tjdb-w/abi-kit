@@ -99,6 +99,34 @@ class NamedTupleTypeTests(unittest.TestCase):
         data = encode_abi_value(t, (7, 8))
         self.assertEqual(get_abi_value_at_path(t, data, "x"), 7)
 
+    def test_solidity_aliases_expand_in_named_declarations(self):
+        # 别名在带名声明语法中与严格解析器一致地规范化为显式类型。
+        t = named("(uint n,(byte tag,fixed f,ufixed r)[] rows,int i)")
+        self.assertEqual(
+            format_abi_type(t),
+            "(uint256,(bytes1,fixed128x18,ufixed128x18)[],int256)",
+        )
+        self.assertEqual(t.names, ("n", "rows", "i"))
+        row = t.components[1].element_type
+        self.assertEqual(row.names, ("tag", "f", "r"))
+        # 各组成类型与严格解析器的显式形式完全一致。
+        self.assertEqual(t.components[0], parse_abi_type("uint256"))
+        self.assertEqual(row.components, (
+            parse_abi_type("bytes1"),
+            parse_abi_type("fixed128x18"),
+            parse_abi_type("ufixed128x18"),
+        ))
+        self.assertEqual(t.components[2], parse_abi_type("int256"))
+
+    def test_alias_near_miss_spellings_still_fail_in_named_parser(self):
+        for bad in (
+            "uint0", "int0", "byte1", "byte2", "fixed128", "ufixed0x18",
+            "(uint0 x)", "(byte2 tag,bool)",
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ABITypeError):
+                    named(bad)
+
 
 class PathSyntaxTests(unittest.TestCase):
     def setUp(self):

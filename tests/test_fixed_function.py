@@ -94,7 +94,6 @@ class FixedFunctionParseTests(unittest.TestCase):
 
     def test_invalid_spellings(self):
         bad = [
-            "fixed", "ufixed",
             "fixedx", "fixed128", "fixed128x", "fixedx3",
             "fixed7x1", "fixed9x1", "fixed10x1", "fixed264x1", "fixed257x8",
             "fixed128x0", "fixed128x81", "fixed8x00",
@@ -107,6 +106,18 @@ class FixedFunctionParseTests(unittest.TestCase):
             with self.subTest(s=s):
                 with self.assertRaises(ABITypeError):
                     parse_abi_type(s)
+
+    def test_bare_fixed_aliases(self):
+        self.assertEqual(
+            format_abi_type(parse_abi_type("fixed")), "fixed128x18"
+        )
+        self.assertEqual(
+            format_abi_type(parse_abi_type("ufixed")), "ufixed128x18"
+        )
+        self.assertEqual(
+            format_abi_type(parse_abi_type("(fixed,ufixed)[]")),
+            "(fixed128x18,ufixed128x18)[]",
+        )
 
     def test_type_object_construction(self):
         self.assertEqual(FixedPointType(True, 8, 1).signed, True)
@@ -525,7 +536,7 @@ class AbiEntryTests(unittest.TestCase):
         )
         for bad in (
             "fixed7x1", "function24", "fixed128x81", "ufixed08x3",
-            "fixed", "fixed256x0", "fixed8x080",
+            "fixed256x0", "fixed8x080",
         ):
             with self.subTest(bad=bad):
                 entry = json.dumps(
@@ -540,6 +551,18 @@ class AbiEntryTests(unittest.TestCase):
                 with self.assertRaises(AbiContractAbiError) as ctx:
                     parse_contract_abi(entry)
                 self.assertEqual(ctx.exception.code, "ABI_ENTRY_INVALID")
+
+    def test_contract_abi_listing_accepts_aliases(self):
+        abi = (
+            '[{"type":"function","name":"set",'
+            '"inputs":[{"type":"fixed"},{"type":"ufixed"},{"type":"uint"}],'
+            '"outputs":[]}]'
+        )
+        listing = parse_contract_abi(abi)
+        self.assertEqual(
+            listing.function_signatures,
+            ("set(fixed128x18,ufixed128x18,uint256)",),
+        )
 
 
 if __name__ == "__main__":

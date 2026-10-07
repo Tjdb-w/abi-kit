@@ -17,6 +17,12 @@ data 编解码、合约部署 constructor 参数编解码。
     `fixedMxN`/`ufixedMxN`（M 为 8–256 的 8 的倍数、N 为 1–80，均无前导
     零）、`address`、`bool`、`string`、`bytes`、`bytesM`（M 为 1–32）、
     `function`（24 字节）、`T[]`、`T[n]` 及任意深度元组，嵌套最多 128 层。
+  - 接受 Solidity 常用类型别名并在解析层规范化：`uint`→`uint256`、
+    `int`→`int256`、`fixed`→`fixed128x18`、`ufixed`→`ufixed128x18`、
+    `byte`→`bytes1`；别名可用于基础位置、任意深度元组/数组元素及 ABI
+    JSON 的 `type`/`components` 递归声明，`format_abi_type` 只输出展开后
+    的规范形式。`uint0`、`byte2`、`fixed128`、`ufixed0x18` 等既非别名也
+    非合法显式形式的拼写仍抛 `ABITypeError`。
 - 已实现：完整值编解码。
   - `encode_abi_value(abi_type, value)` / `decode_abi_value(abi_type, data)`，
     遵循 head/tail 布局，解码采用严格规范（紧密排列、填充必须为零）。

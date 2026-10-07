@@ -34,11 +34,10 @@ class ParseElementaryTests(unittest.TestCase):
 
     def test_invalid_elementary_types(self):
         bad = [
-            "uint", "int",
             "uint7", "uint9", "uint10", "uint264", "uint257",
             "int7", "int264",
             "bytes0", "bytes33",
-            "byte", "hash", "address20", "boolean",
+            "hash", "address20", "boolean",
             "uint08", "int016", "bytes03",
         ]
         for s in bad:
@@ -58,6 +57,76 @@ class ParseElementaryTests(unittest.TestCase):
         d = parse_abi_type("bytes")
         self.assertEqual(d.kind, "bytes")
         self.assertIsNone(d.byte_size)
+
+
+class AliasTests(unittest.TestCase):
+    """Solidity 常用别名在解析层规范化为显式宽度类型。"""
+
+    ALIASES = {
+        "uint": "uint256",
+        "int": "int256",
+        "byte": "bytes1",
+        "fixed": "fixed128x18",
+        "ufixed": "ufixed128x18",
+    }
+
+    def test_bare_aliases_expand(self):
+        for alias, canonical in self.ALIASES.items():
+            with self.subTest(alias=alias):
+                via_alias = parse_abi_type(alias)
+                via_explicit = parse_abi_type(canonical)
+                self.assertEqual(via_alias, via_explicit)
+                self.assertEqual(format_abi_type(via_alias), canonical)
+                self.assertNotEqual(format_abi_type(via_alias), alias)
+
+    def test_aliases_in_containers(self):
+        cases = {
+            "uint[]": "uint256[]",
+            "int[3]": "int256[3]",
+            "byte[][]": "bytes1[][]",
+            "(uint,int)": "(uint256,int256)",
+            "(fixed,ufixed)[]": "(fixed128x18,ufixed128x18)[]",
+            "((byte),uint[2])[]": "((bytes1),uint256[2])[]",
+            "(uint8,byte,(fixed[],address))":
+                "(uint8,bytes1,(fixed128x18[],address))",
+        }
+        for raw, canonical in cases.items():
+            with self.subTest(raw=raw):
+                t = parse_abi_type(raw)
+                self.assertEqual(format_abi_type(t), canonical)
+                # 展开结果与显式形式解析出的对象完全相等。
+                self.assertEqual(t, parse_abi_type(canonical))
+
+    def test_alias_whitespace_rules_unchanged(self):
+        self.assertEqual(format_abi_type(parse_abi_type("  uint  ")), "uint256")
+        self.assertEqual(
+            format_abi_type(parse_abi_type("(uint , int)")),
+            "(uint256,int256)",
+        )
+        for bad in ("ui nt", "byt e", "uint []", "( uint)"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ABITypeError):
+                    parse_abi_type(bad)
+
+    def test_alias_depth_rules_unchanged(self):
+        # 别名占据基础层一层，与显式类型一致参与深度计数。
+        t = parse_abi_type("uint" + "[]" * 127)
+        self.assertEqual(t.depth, MAX_TYPE_DEPTH)
+        with self.assertRaises(ABITypeError):
+            parse_abi_type("uint" + "[]" * 128)
+
+    def test_alias_near_miss_spellings_fail(self):
+        bad = [
+            "uint0", "int0", "uint1", "int9",
+            "byte0", "byte1", "byte2", "byte33",
+            "fixed128", "ufixed128", "fixedx18", "ufixedx18",
+            "fixed0x18", "ufixed0x18", "fixed128x", "fixed128x0",
+            "FIXED", "Ufixed", "Fixed128x18",
+        ]
+        for s in bad:
+            with self.subTest(s=s):
+                with self.assertRaises(ABITypeError):
+                    parse_abi_type(s)
 
 
 class ArrayTests(unittest.TestCase):

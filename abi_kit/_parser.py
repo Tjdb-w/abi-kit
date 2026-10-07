@@ -8,6 +8,17 @@
     tuple      := '(' [type (',' type)*] ')'
     suffix     := '[]' | '[' [1-9][0-9]* ']'
 
+Solidity 常用类型别名按下列等价关系在解析层规范化，类型对象与
+format_abi_type 均只保留展开后的显式规范形式::
+
+    uint   → uint256       int    → int256
+    fixed  → fixed128x18   ufixed → ufixed128x18
+    byte   → bytes1
+
+别名可出现在基础位置、任意深度元组与数组元素中；``uint0``、
+``byte2``、``fixed128``、``ufixed0x18`` 等既非别名也非合法显式形式
+的拼写一律报错。
+
 空白（仅 ASCII 空白）只允许出现在：
 1. 整个类型字符串的两端；
 2. 元组中逗号的两侧。
@@ -98,6 +109,18 @@ class _Parser:
             return ElementaryType("bytes")
         if word == "function":
             return FunctionType()
+        # Solidity 常用类型别名：在解析层规范化为显式宽度的等价类型，
+        # format_abi_type 只输出展开后的规范形式，不保留别名拼写。
+        if word == "uint":
+            return ElementaryType("uint", bit_size=256)
+        if word == "int":
+            return ElementaryType("int", bit_size=256)
+        if word == "byte":
+            return ElementaryType("bytes", byte_size=1)
+        if word == "fixed":
+            return FixedPointType(True, 128, 18)
+        if word == "ufixed":
+            return FixedPointType(False, 128, 18)
         if word.startswith("bytes") and len(word) > len("bytes"):
             return self._sized_bytes(word)
         if word.startswith(("ufixed", "fixed")):

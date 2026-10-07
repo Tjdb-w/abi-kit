@@ -136,6 +136,18 @@ class _NamedParser:
             return ElementaryType(word)
         if word == "function":
             return FunctionType()
+        # Solidity 常用别名，与 abi_kit.parse_abi_type 在同一解析层规范化
+        # 为显式宽度的等价类型。
+        if word == "uint":
+            return ElementaryType("uint", bit_size=256)
+        if word == "int":
+            return ElementaryType("int", bit_size=256)
+        if word == "byte":
+            return ElementaryType("bytes", byte_size=1)
+        if word == "fixed":
+            return FixedPointType(True, 128, 18)
+        if word == "ufixed":
+            return FixedPointType(False, 128, 18)
         if word.startswith("bytes") and len(word) > len("bytes"):
             digits = self._digits(word, "bytes")
             try:
