@@ -37,6 +37,17 @@ class ABITypeError(ValueError):
     """无效的 ABI 类型字符串或类型对象。"""
 
 
+class RangeError(ValueError):
+    """ABI 类型声明的值域非法。
+
+    用于 :func:`abi_kit.describeAbiType`：类型文本语法无法识别、整数位宽
+    越界、bytesM/数组长度非法、fixedMxN 的 M/N 越界，或非 tuple 声明
+    带有 components 等——即声明结构正确但类型取值不合法的情形。它与
+    :class:`TypeError`（输入本身不是字典、type 不是字符串、tuple 缺
+    components 等结构/类别错误）互斥。
+    """
+
+
 class ABIValueError(ValueError):
     """值与类型不匹配、非法 ABI 编码，或类型对象无法进行值编解码。"""
 

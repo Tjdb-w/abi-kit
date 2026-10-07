@@ -31,6 +31,8 @@
   decode_contract_call）。
 - 整份合约 ABI 的只读清单解析与校验
   （parse_contract_abi / ContractAbiDefinition）。
+- ABI 类型布局诊断：编码前预检与结构说明，只返回诊断字典，不编解码、
+  不读写文件（describeAbiType）。
 
 类型层错误抛出 ABITypeError，值层错误抛出 ABIValueError（别名
 AbiValueError），路径层七类失败抛出带错误码的 AbiPathError，事件层
@@ -50,6 +52,12 @@ AbiTrailingDataError（元数据错误同样共用 AbiMetadataError）；合约�
 尾随数据仍抛 AbiTrailingDataError；整份合约 ABI 的只读清单解析与校验
 （根、条目、重复登记、签名/selector/topic0 冲突）只抛带错误码的
 AbiContractAbiError。
+
+类型布局诊断 describeAbiType 的结构/类别错误（输入非 dict、type 非
+字符串、tuple 缺 components 等）抛内置 TypeError，类型值域非法
+（语法、位宽、bytesN、fixedMxN、数组长度、非 tuple 带 components）
+抛 RangeError；该入口只做预检与结构说明，不改变既有编解码字节或
+日志结果。
 """
 
 from ._codec import decode_abi_value, encode_abi_value
@@ -79,6 +87,7 @@ from ._contract_call import (
     encode_contract_call,
     parse_contract_call_registry,
 )
+from ._describe import describeAbiType
 from ._error import (
     DecodedErrorData,
     EncodedErrorData,
@@ -120,6 +129,7 @@ from ._exceptions import (
     AbiValueError,
     ABITypeError,
     ABIValueError,
+    RangeError,
 )
 from ._format import format_abi_type
 from ._function import (
@@ -178,6 +188,7 @@ __all__ = [
     "AbiDeploymentDataError",
     "AbiContractCallError",
     "AbiContractAbiError",
+    "RangeError",
     "ABIType",
     "ElementaryType",
     "FixedPointType",
@@ -186,6 +197,7 @@ __all__ = [
     "TupleType",
     "parse_abi_type",
     "format_abi_type",
+    "describeAbiType",
     "encode_abi_value",
     "decode_abi_value",
     "get_abi_value_at_path",

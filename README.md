@@ -1,6 +1,6 @@
 # ABI Kit
 
-合约 ABI 编解码套件：类型解析、嵌套结构编解码、事件日志还原与校验、
+合约 ABI 编解码套件：类型解析、类型布局诊断、嵌套结构编解码、事件日志还原与校验、
 嵌套值的路径化读取与定点替换、函数调用 calldata 编解码、error revert
 data 编解码、合约部署 constructor 参数编解码。
 
@@ -253,6 +253,27 @@ data 编解码、合约部署 constructor 参数编解码。
     constructor 为 `None`、receive/fallback 为 `False`；相同输入重复解析
     稳定。只抛 `AbiContractAbiError`（见异常表），不改变其他入口的输入
     输出和异常。
+- 已实现：ABI 类型布局诊断（编码前预检与结构说明）。
+  - `describeAbiType(node)`：输入一个 ABI JSON 类型节点（`type` 为类型
+    文本，`tuple` 或以 tuple 为元素的数组可带 `components`），只返回
+    诊断字典，不编解码、不读写文件；参数名与成员名不进入结果，同输入
+    稳定同输出。
+  - 字典只含 `canonical`、`kind`、`isDynamic`、`arrayLength`、`base`、
+    `components` 并递归展开：`canonical` 无空白、无名称、可用于签名
+    （如 `uint256`、`bytes32`、`address[]`、`(bytes32,uint256)[2]`，
+    别名沿用解析层归一）；`kind` 取 `uint`/`int`/`address`/`bool`/
+    `bytesN`/`bytes`/`string`/`fixed`/`ufixed`/`function`/`array`/
+    `tuple`；数组的 `base` 为元素诊断、其余为 `null`；定长数组
+    `arrayLength` 为正整数、动态数组与非数组为 `null`；tuple 的
+    `components` 为子诊断（空 tuple 为 `[]`），叶子为 `null`；数组链
+    指向 tuple 时每层 `components` 都给出最内层 tuple 的同一组子诊断。
+  - `isDynamic` 按 Solidity ABI 规则判断：`bytes`、`string`、动态数组、
+    元素动态的数组、含动态成员的 tuple 为 `true`，其余为 `false`。
+  - 输入非对象、`type` 非字符串、tuple 缺 `components` 或其非数组时抛
+    `TypeError`；类型语法、整数位宽、`bytesN`、`fixedMxN`、数组长度
+    非法或非 tuple 带 `components` 时抛 `RangeError`（消息指出输入层级
+    与字段，不含文件路径）。该入口只增加预检与结构说明，不改变既有
+    编码字节或日志结果。
 
 ## 路径
 
@@ -281,6 +302,12 @@ data 编解码、合约部署 constructor 参数编解码。
 
 - `ABITypeError`：类型层错误（既有语义不变）。
 - `ABIValueError`：值与类型不匹配、编码数据非法（既有语义不变）。
+- `describeAbiType` 的类型布局诊断错误使用 Python 内置异常类别：
+  结构/类别错误（输入非对象、`type` 非字符串、tuple 缺 `components`
+  或其非数组）抛内置 `TypeError`；值域非法（类型语法、整数位宽、
+  `bytesN`、`fixedMxN`、数组长度、非 tuple 带 `components`）抛
+  `RangeError`（`ValueError` 子类，随包导出）。消息指出输入层级与
+  字段且不含文件路径，同输入得到同一异常。
 - `AbiPathError`：路径层七类失败，统一通过异常的 `code` 属性携带唯一
   错误码：
 
