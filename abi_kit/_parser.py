@@ -8,6 +8,13 @@
     tuple      := '(' [type (',' type)*] ')'
     suffix     := '[]' | '[' [1-9][0-9]* ']'
 
+Solidity 常用裸别名在基础位置（词法完整匹配）展开为等价的显式宽度
+类型，:func:`format_abi_type` 始终输出展开后的规范形式：
+``uint``→``uint256``、``int``→``int256``、``fixed``→``fixed128x18``、
+``ufixed``→``ufixed128x18``、``byte``→``bytes1``。别名可出现在基础
+位置、任意深度元组与数组元素中；``uint0``、``byte2``、``fixed128``、
+``ufixed0x18`` 等带宽度或缺小数位的写法不命中别名，仍为非法输入。
+
 空白（仅 ASCII 空白）只允许出现在：
 1. 整个类型字符串的两端；
 2. 元组中逗号的两侧。
@@ -28,6 +35,21 @@ from ._types import (
 )
 
 _WHITESPACE = " \t\n\r\f\v"
+
+#: Solidity 常用类型别名到显式规范类型的展开表。
+#:
+#: 裸别名仅在基础位置（词法完整匹配）命中，并直接展开为等价的显式宽度
+#: 类型对象；:func:`format_abi_type` 因而始终输出右侧的规范形式而不保留
+#: 别名拼写。``uint0``、``byte2``、``fixed128``、``ufixed0x18`` 等带宽度
+#: 或缺小数位的写法不会完整命中本表，仍按既有显式形式规则报
+#: :class:`ABITypeError`。
+_TYPE_ALIASES: dict[str, ABIType] = {
+    "uint": ElementaryType("uint", bit_size=256),
+    "int": ElementaryType("int", bit_size=256),
+    "fixed": FixedPointType(True, 128, 18),
+    "ufixed": FixedPointType(False, 128, 18),
+    "byte": ElementaryType("bytes", byte_size=1),
+}
 
 #: 解析器括号递归的安全上限：语义嵌套上限（128 层）由类型对象构造时
 #: 检查；此阈值仅用于在触及 Python 递归限制（实测约 500 层括号）前抛出
@@ -92,6 +114,11 @@ class _Parser:
         return self._classify(word)
 
     def _classify(self, word: str) -> ABIType:
+        alias = _TYPE_ALIASES.get(word)
+        if alias is not None:
+            # 裸别名仅在词法完整匹配时展开为显式规范类型；带宽度/小数位
+            # 的近似写法（uint0、byte2、fixed128、ufixed0x18 等）不命中。
+            return alias
         if word in ("address", "bool", "string"):
             return ElementaryType(word)
         if word == "bytes":

@@ -34,12 +34,38 @@ class ParseElementaryTests(unittest.TestCase):
 
     def test_invalid_elementary_types(self):
         bad = [
-            "uint", "int",
             "uint7", "uint9", "uint10", "uint264", "uint257",
             "int7", "int264",
             "bytes0", "bytes33",
-            "byte", "hash", "address20", "boolean",
+            "hash", "address20", "boolean",
             "uint08", "int016", "bytes03",
+        ]
+        for s in bad:
+            with self.subTest(s=s):
+                with self.assertRaises(ABITypeError):
+                    parse_abi_type(s)
+
+    def test_aliases_expand_to_canonical(self):
+        expected = {
+            "uint": "uint256",
+            "int": "int256",
+            "fixed": "fixed128x18",
+            "ufixed": "ufixed128x18",
+            "byte": "bytes1",
+        }
+        for alias, canonical in expected.items():
+            with self.subTest(alias=alias):
+                t = parse_abi_type(alias)
+                self.assertEqual(format_abi_type(t), canonical)
+                # 别名展开后的对象与显式规范形式完全等价。
+                self.assertEqual(t, parse_abi_type(canonical))
+
+    def test_alias_near_misses_remain_invalid(self):
+        # 既非别名也非既有合法形式：带宽度、带部分小数位或近似拼写。
+        bad = [
+            "uint0", "byte2",
+            "fixed128", "fixed128x", "fixedx18",
+            "ufixed0x18", "fixed0x18", "ufixed128x0",
         ]
         for s in bad:
             with self.subTest(s=s):

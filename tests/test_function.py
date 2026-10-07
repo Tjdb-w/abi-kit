@@ -256,7 +256,7 @@ class ParseFunctionAbiTests(unittest.TestCase):
         self._invalid([fn("f", [42])])
         self._invalid([fn("f", [{"type": 7}])])
         self._invalid([fn("f", [{"type": ""}])])
-        self._invalid([fn("f", [{"type": "uint"}])])
+        self._invalid([fn("f", [{"type": "uint0"}])])
         self._invalid([fn("f", [{"type": "address", "name": 1}])])
 
     def test_invalid_tuple(self):
@@ -270,7 +270,7 @@ class ParseFunctionAbiTests(unittest.TestCase):
         )
         self._invalid(
             [fn("f", [{"type": "tuple",
-                       "components": [{"type": "uint"}]}])]
+                       "components": [{"type": "uint0"}]}])]
         )
         self._invalid([fn("f", [{"type": "uint256",
                                  "components": [{"type": "bool"}]}])])

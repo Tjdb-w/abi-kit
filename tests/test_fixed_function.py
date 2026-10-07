@@ -94,7 +94,6 @@ class FixedFunctionParseTests(unittest.TestCase):
 
     def test_invalid_spellings(self):
         bad = [
-            "fixed", "ufixed",
             "fixedx", "fixed128", "fixed128x", "fixedx3",
             "fixed7x1", "fixed9x1", "fixed10x1", "fixed264x1", "fixed257x8",
             "fixed128x0", "fixed128x81", "fixed8x00",
@@ -525,7 +524,7 @@ class AbiEntryTests(unittest.TestCase):
         )
         for bad in (
             "fixed7x1", "function24", "fixed128x81", "ufixed08x3",
-            "fixed", "fixed256x0", "fixed8x080",
+            "fixed256x0", "fixed8x080",
         ):
             with self.subTest(bad=bad):
                 entry = json.dumps(

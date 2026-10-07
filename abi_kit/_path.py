@@ -45,6 +45,7 @@ from __future__ import annotations
 
 from ._codec import _encode, decode_abi_value
 from ._exceptions import ABITypeError, ABIValueError, AbiPathError
+from ._parser import _TYPE_ALIASES
 from ._types import (
     ABIType,
     ArrayType,
@@ -132,6 +133,11 @@ class _NamedParser:
             else:
                 break
         word = text[start:self._pos]
+        alias = _TYPE_ALIASES.get(word)
+        if alias is not None:
+            # 与 parse_abi_type 相同的裸别名展开；带字段名的组件写法中
+            # 别名同样只在基础位置（词法完整匹配）命中。
+            return alias
         if word in ("address", "bool", "string", "bytes"):
             return ElementaryType(word)
         if word == "function":

@@ -169,7 +169,7 @@ class RegistryParsingTests(unittest.TestCase):
             {"type": "function", "inputs": []},
             {"type": "function", "name": "f"},
             {"type": "function", "name": "1f", "inputs": []},
-            {"type": "function", "name": "f", "inputs": [{"type": "uint"}]},
+            {"type": "function", "name": "f", "inputs": [{"type": "uint0"}]},
         ):
             with self.assertRaises(AbiContractCallError) as ctx:
                 parse_contract_call_registry([bad])

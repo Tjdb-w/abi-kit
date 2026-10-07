@@ -299,7 +299,7 @@ class ParseEventAbiTests(unittest.TestCase):
             {"type": "event", "name": "E", "inputs": [{"type": ""}]}
         )
         self._invalid(
-            {"type": "event", "name": "E", "inputs": [{"type": "uint"}]}
+            {"type": "event", "name": "E", "inputs": [{"type": "uint0"}]}
         )
         self._invalid(
             {"type": "event", "name": "E", "inputs": [{"type": "address", "name": 1}]}
@@ -320,7 +320,7 @@ class ParseEventAbiTests(unittest.TestCase):
             {
                 "type": "event",
                 "name": "E",
-                "inputs": [{"type": "tuple", "components": [{"type": "uint"}]}],
+                "inputs": [{"type": "tuple", "components": [{"type": "uint0"}]}],
             }
         )
         self._invalid(
